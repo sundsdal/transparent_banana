@@ -39,6 +39,15 @@ npx tsx transparent-banana.ts --white white.png --black black.png -o result.png
 | `--black <path>` | Pre-generated black-background image |
 | `--save-intermediates` | Save the white and black intermediate images |
 
+## Models
+
+We recommend **Nano Banana Pro** for best results.
+
+| Model | ID | Description |
+|---|---|---|
+| **Nano Banana Pro** | `gemini-3-pro-image-preview` | Designed for professional asset production, utilizing advanced reasoning ("Thinking") to follow complex instructions and render high-fidelity text. |
+| Nano Banana | `gemini-2.5-flash-image` | Designed for speed and efficiency, optimized for high-volume, low-latency tasks. |
+
 ## Setup
 
 ```bash
