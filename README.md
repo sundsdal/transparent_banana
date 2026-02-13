@@ -1,6 +1,6 @@
 # transparent-banana
 
-CLI tool that generates transparent PNGs using Google Gemini image generation and difference matting.
+CLI tool that generates transparent PNGs using Nano Banana and difference matting.
 
 ## How it works
 
@@ -34,7 +34,7 @@ npx tsx transparent-banana.ts --white white.png --black black.png -o result.png
 |---|---|
 | `-i, --input <path>` | Input image to extract an object from |
 | `-o, --output <path>` | Output file path (default: `output.png`) |
-| `-m, --model <name>` | Gemini model (default: `gemini-3-pro-image-preview`) |
+| `-m, --model <name>` | Nano Banana model (default: Nano Banana 3 Pro) |
 | `--white <path>` | Pre-generated white-background image |
 | `--black <path>` | Pre-generated black-background image |
 | `--save-intermediates` | Save the white and black intermediate images |
@@ -46,4 +46,4 @@ npm install
 export GEMINI_API_KEY="your-key"
 ```
 
-Requires a [Google Gemini API key](https://ai.google.dev/).
+Requires a [Nano Banana API key](https://ai.google.dev/).
