@@ -1,0 +1,19 @@
+{
+  "name": "transparent-nano-banana",
+  "version": "1.0.0",
+  "description": "CLI tool to generate transparent PNG images using Nano Banana Pro 2 and difference matting",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "generate": "tsx transparent-banana.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
