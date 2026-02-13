@@ -34,7 +34,7 @@ npx tsx transparent-banana.ts --white white.png --black black.png -o result.png
 |---|---|
 | `-i, --input <path>` | Input image to extract an object from |
 | `-o, --output <path>` | Output file path (default: `output.png`) |
-| `-m, --model <name>` | Nano Banana model (default: Nano Banana 3 Pro) |
+| `-m, --model <name>` | Nano Banana model (default: `gemini-3-pro-image-preview`) |
 | `--white <path>` | Pre-generated white-background image |
 | `--black <path>` | Pre-generated black-background image |
 | `--save-intermediates` | Save the white and black intermediate images |
