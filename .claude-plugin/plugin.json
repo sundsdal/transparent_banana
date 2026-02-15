@@ -1,0 +1,5 @@
+{
+  "name": "transparent-banana",
+  "version": "1.0.0",
+  "description": "Generate transparent PNGs using Gemini image generation and difference matting"
+}
