@@ -1,0 +1,266 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "google-genai",
+#     "Pillow",
+#     "numpy",
+# ]
+# ///
+"""transparent-banana — Generate and edit images with optional transparency via Gemini + difference matting."""
+
+import argparse
+import base64
+import io
+import math
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+from google import genai
+from PIL import Image
+
+DEFAULT_MODEL = "gemini-3.1-flash-image-preview"
+
+
+def image_to_base64(img: Image.Image, fmt: str = "PNG") -> str:
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def extract_image_from_response(response) -> Image.Image:
+    parts = response.candidates[0].content.parts
+    for part in parts:
+        if part.inline_data:
+            return Image.open(io.BytesIO(part.inline_data.data))
+    raise RuntimeError("No image in response")
+
+
+ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+
+MODELS = {
+    "flash":   "gemini-3.1-flash-image-preview",
+    "pro":     "gemini-3-pro-image-preview",
+    "flash-2": "gemini-2.5-flash-image",
+}
+
+
+def call_gemini(client: genai.Client, model: str, prompt: str,
+                images: list[Image.Image] | None = None, aspect_ratio: str | None = None) -> Image.Image:
+    from google.genai import types
+
+    contents = []
+    if images:
+        contents.append({"text": prompt})
+        for img in images:
+            contents.append({
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": image_to_base64(img),
+                }
+            })
+    else:
+        contents = prompt
+
+    image_config = types.ImageConfig(aspect_ratio=aspect_ratio) if aspect_ratio else None
+
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=image_config,
+        ),
+    )
+    return extract_image_from_response(response)
+
+
+def generate_on_white(client: genai.Client, prompt: str, model: str, aspect_ratio: str | None = None) -> Image.Image:
+    text = f"{prompt}. On a pure solid white #FFFFFF background"
+    print("Step 1/3: Generating image on white background...")
+    print(f'  Prompt: "{text}"')
+    return call_gemini(client, model, text, aspect_ratio=aspect_ratio)
+
+
+def extract_object_on_white(client: genai.Client, images: list[Image.Image], prompt: str, model: str) -> Image.Image:
+    text = (
+        f"This image contains {prompt}. Remove everything from the scene except {prompt}. "
+        f"Place the isolated object on a plain, pure white #FFFFFF background with no shadows, "
+        f"no reflections, and no other elements. Do not change the object itself in any way — "
+        f"preserve its exact colors, shape, size, and details."
+    )
+    print("Step 1/3: Extracting object onto white background...")
+    print(f'  Prompt: "{text}"')
+    return call_gemini(client, model, text, images)
+
+
+def edit_to_black(client: genai.Client, white_image: Image.Image, model: str) -> Image.Image:
+    text = "Change the white background to a solid pure black #000000 background. Keep everything else exactly unchanged."
+    print("Step 2/3: Editing background to black...")
+    print(f'  Prompt: "{text}"')
+    return call_gemini(client, model, text, [white_image])
+
+
+def extract_alpha(white_img: Image.Image, black_img: Image.Image) -> Image.Image:
+    """Compute alpha via difference matting between white- and black-background renders."""
+    print("Step 3/3: Extracting alpha via difference matting...")
+
+    white_img = white_img.convert("RGBA")
+    black_img = black_img.resize(white_img.size).convert("RGBA")
+
+    w = np.array(white_img, dtype=np.float64)
+    b = np.array(black_img, dtype=np.float64)
+
+    bg_dist = math.sqrt(3 * 255 * 255)
+
+    # Pixel distance between white and black renders
+    diff = w[:, :, :3] - b[:, :, :3]
+    pixel_dist = np.sqrt(np.sum(diff ** 2, axis=2))
+
+    alpha = np.clip(1.0 - pixel_dist / bg_dist, 0.0, 1.0)
+
+    # Recover true color from black-background render: C = B / alpha
+    alpha_safe = np.where(alpha > 0.01, alpha, 1.0)  # avoid division by zero
+    out = np.zeros_like(w)
+    out[:, :, 0] = np.clip(b[:, :, 0] / alpha_safe, 0, 255)
+    out[:, :, 1] = np.clip(b[:, :, 1] / alpha_safe, 0, 255)
+    out[:, :, 2] = np.clip(b[:, :, 2] / alpha_safe, 0, 255)
+    out[:, :, 3] = alpha * 255
+
+    # Zero out fully transparent pixels
+    mask = alpha <= 0.01
+    out[mask] = 0
+
+    return Image.fromarray(out.astype(np.uint8), "RGBA")
+
+
+def save_intermediates(white_img: Image.Image, black_img: Image.Image, output_path: str):
+    p = Path(output_path)
+    base = p.stem
+    d = p.parent
+    white_path = d / f"{base}-white.png"
+    black_path = d / f"{base}-black.png"
+    white_img.save(white_path)
+    black_img.save(black_path)
+    print(f"Saved intermediates: {white_path}, {black_path}")
+
+
+BUNDLED_API_KEY = os.environ.get("NANOBANANA_BUNDLE_KEY", "")
+
+
+def get_client() -> genai.Client:
+    api_key = os.environ.get("GEMINI_API_KEY") or BUNDLED_API_KEY
+    if not api_key:
+        print("Error: GEMINI_API_KEY environment variable is required", file=sys.stderr)
+        sys.exit(1)
+    return genai.Client(api_key=api_key)
+
+
+def resolve_model(name: str) -> str:
+    """Resolve model alias or return as-is."""
+    return MODELS.get(name, name)
+
+
+def transparent_pipeline(client: genai.Client, model: str, prompt: str, output: str,
+                         save_inter: bool, images: list[Image.Image] | None = None,
+                         aspect_ratio: str | None = None):
+    """Run the white/black/matting pipeline."""
+    if images:
+        white_img = extract_object_on_white(client, images, prompt, model)
+    else:
+        white_img = generate_on_white(client, prompt, model, aspect_ratio)
+
+    black_img = edit_to_black(client, white_img, model)
+
+    if save_inter:
+        save_intermediates(white_img, black_img, output)
+
+    result = extract_alpha(white_img, black_img)
+    result.save(output)
+    print(f"Done! Transparent PNG saved to: {output}")
+
+
+def direct_pipeline(client: genai.Client, model: str, prompt: str, output: str,
+                    images: list[Image.Image] | None = None,
+                    aspect_ratio: str | None = None):
+    """Generate or edit without transparency."""
+    if images:
+        print("Editing image...")
+        print(f'  Prompt: "{prompt}"')
+        result = call_gemini(client, model, prompt, images, aspect_ratio)
+    else:
+        print("Generating image...")
+        print(f'  Prompt: "{prompt}"')
+        result = call_gemini(client, model, prompt, aspect_ratio=aspect_ratio)
+
+    result.save(output)
+    print(f"Done! Image saved to: {output}")
+
+
+def run(args):
+    client = get_client()
+    model = resolve_model(args.model)
+    images = None
+
+    if args.input:
+        paths = [p.strip() for p in args.input.split(",")]
+        images = []
+        for p in paths:
+            if not Path(p).exists():
+                print(f"Error: Input image not found: {p}", file=sys.stderr)
+                sys.exit(1)
+            images.append(Image.open(p))
+
+    if args.transparent:
+        transparent_pipeline(client, model, args.prompt, args.output,
+                             args.save_intermediates, images, args.aspect)
+    else:
+        direct_pipeline(client, model, args.prompt, args.output, images, args.aspect)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="nanobanana",
+        description="Generate and edit images via Gemini.",
+        epilog="""models:
+  flash    gemini-3.1-flash-image-preview  (default, fast)
+  pro      gemini-3-pro-image-preview      (highest quality)
+  flash-2  gemini-2.5-flash-image            (legacy)
+
+aspect ratios:
+  1:1   Square         4:3   Classic photo    16:9  Widescreen
+  3:4   Portrait       3:2   Landscape        9:16  Mobile/stories
+  4:5   Instagram      5:4   Large format     21:9  Ultra-wide
+  2:3   Tall portrait
+
+examples:
+  nanobanana "a cat with a hat"
+  nanobanana "a glass vase" -o vase.png --transparent
+  nanobanana "a phone wallpaper" -a 9:16 -m pro
+  nanobanana -i photo.jpg "remove the background"
+  nanobanana -i photo.jpg "the vase" --transparent
+  nanobanana -i output.png "make it more colorful"
+  nanobanana -i a.png,b.png "combine these into one scene"
+
+--transparent produces a PNG with alpha channel (slower, 3 API calls).""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument("prompt", help="Text prompt")
+    parser.add_argument("-i", "--input", default=None, help="Input image(s) to edit (comma-separated)")
+    parser.add_argument("-o", "--output", default="output.png", help="Output file path (default: output.png)")
+    parser.add_argument("-m", "--model", default=DEFAULT_MODEL,
+                        help="Model alias (flash, pro, flash-2) or full ID")
+    parser.add_argument("-a", "--aspect", choices=ASPECT_RATIOS, default=None, metavar="RATIO",
+                        help="Aspect ratio (e.g. 16:9, 1:1, 9:16)")
+    parser.add_argument("--transparent", action="store_true", help="Enable transparency via difference matting")
+    parser.add_argument("--save-intermediates", action="store_true", help="Save intermediate images (with --transparent)")
+
+    args = parser.parse_args()
+    run(args)
+
+
+if __name__ == "__main__":
+    main()
