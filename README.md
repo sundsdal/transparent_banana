@@ -20,12 +20,22 @@ Run directly with [uv](https://docs.astral.sh/uv/) (deps auto-installed):
 ./nanobanana "a cat with a hat"
 ```
 
-Or build a standalone binary:
+### Standalone binary
+
+Build a self-contained binary with PyInstaller:
 
 ```bash
 ./build.sh        # produces dist/nanobanana
 ./clean.sh        # removes build artifacts
 ```
+
+To bake an API key into the binary so users don't need to set `GEMINI_API_KEY`:
+
+```bash
+NANOBANANA_BUNDLE_KEY="your-key" ./build.sh
+```
+
+At runtime, `GEMINI_API_KEY` still takes priority over the bundled key.
 
 ## Usage
 
