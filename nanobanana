@@ -38,7 +38,7 @@ def extract_image_from_response(response) -> Image.Image:
     raise RuntimeError("No image in response")
 
 
-ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+ASPECT_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
 
 MODELS = {
     "flash":   "gemini-3.1-flash-image-preview",
@@ -233,7 +233,8 @@ aspect ratios:
   1:1   Square         4:3   Classic photo    16:9  Widescreen
   3:4   Portrait       3:2   Landscape        9:16  Mobile/stories
   4:5   Instagram      5:4   Large format     21:9  Ultra-wide
-  2:3   Tall portrait
+  2:3   Tall portrait  1:4   Tall banner      4:1   Wide banner
+  1:8   Extra tall     8:1   Extra wide
 
 examples:
   nanobanana "a cat with a hat"
