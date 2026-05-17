@@ -31,11 +31,36 @@ def image_to_base64(img: Image.Image, fmt: str = "PNG") -> str:
 
 
 def extract_image_from_response(response) -> Image.Image:
-    parts = response.candidates[0].content.parts
+    if not response.candidates:
+        pf = getattr(response, "prompt_feedback", None)
+        raise RuntimeError(f"No candidates in response. prompt_feedback={pf}")
+
+    candidate = response.candidates[0]
+    finish_reason = getattr(candidate, "finish_reason", None)
+    safety_ratings = getattr(candidate, "safety_ratings", None)
+    parts = candidate.content.parts if candidate.content else None
+
+    if not parts:
+        raise RuntimeError(
+            f"Model returned no content parts. "
+            f"finish_reason={finish_reason}, safety_ratings={safety_ratings}. "
+            f"This usually means the request was blocked by safety filters "
+            f"(common with face-swap / identity edits of real people) or the "
+            f"model declined to generate an image. Try rewording the prompt."
+        )
+
+    text_chunks = []
     for part in parts:
         if part.inline_data:
             return Image.open(io.BytesIO(part.inline_data.data))
-    raise RuntimeError("No image in response")
+        if getattr(part, "text", None):
+            text_chunks.append(part.text)
+
+    detail = " | ".join(text_chunks) if text_chunks else "(no text returned)"
+    raise RuntimeError(
+        f"No image in response. finish_reason={finish_reason}. "
+        f"Model returned text instead: {detail}"
+    )
 
 
 ASPECT_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
