@@ -3,7 +3,7 @@ import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
 
-const DEFAULT_MODEL = "gemini-3-pro-image-preview";
+const DEFAULT_MODEL = "gemini-3.1-flash-image";
 
 async function generateOnWhite(
   ai: GoogleGenAI,

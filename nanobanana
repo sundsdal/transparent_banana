@@ -21,7 +21,7 @@ import numpy as np
 from google import genai
 from PIL import Image
 
-DEFAULT_MODEL = "gemini-3.1-flash-image-preview"
+DEFAULT_MODEL = "gemini-3.1-flash-image"
 
 
 def image_to_base64(img: Image.Image, fmt: str = "PNG") -> str:
@@ -41,8 +41,8 @@ def extract_image_from_response(response) -> Image.Image:
 ASPECT_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
 
 MODELS = {
-    "flash":   "gemini-3.1-flash-image-preview",
-    "pro":     "gemini-3-pro-image-preview",
+    "flash":   "gemini-3.1-flash-image",
+    "pro":     "gemini-3-pro-image",
     "flash-2": "gemini-2.5-flash-image",
 }
 
@@ -225,8 +225,8 @@ def main():
         prog="nanobanana",
         description="Generate and edit images via Gemini.",
         epilog="""models:
-  flash    gemini-3.1-flash-image-preview  (default, fast)
-  pro      gemini-3-pro-image-preview      (highest quality)
+  flash    gemini-3.1-flash-image  (default, fast)
+  pro      gemini-3-pro-image      (highest quality)
   flash-2  gemini-2.5-flash-image            (legacy)
 
 aspect ratios:

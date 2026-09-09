@@ -63,9 +63,11 @@ nanobanana -i a.png,b.png "combine into one scene"     # multiple input images
 
 | Alias | Model ID | |
 |---|---|---|
-| `flash` | `gemini-3.1-flash-image-preview` | Default, fast |
-| `pro` | `gemini-3-pro-image-preview` | Highest quality |
+| `flash` | `gemini-3.1-flash-image` | Nano Banana 2 (default) |
+| `pro` | `gemini-3-pro-image` | Nano Banana Pro, highest quality |
 | `flash-2` | `gemini-2.5-flash-image` | Legacy |
+
+Both CLIs default to the stable Nano Banana 2 model. See [Google's model guide](https://ai.google.dev/gemini-api/docs/image-generation) for details.
 
 ## Aspect ratios
 
