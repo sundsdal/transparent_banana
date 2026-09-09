@@ -14,6 +14,27 @@ import (
 	"testing"
 )
 
+func TestResolveAPIKey(t *testing.T) {
+	previous := bundledAPIKey
+	t.Cleanup(func() { bundledAPIKey = previous })
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("NANOBANANA_BUNDLE_KEY", "")
+	bundledAPIKey = "embedded-test-key"
+	if resolveAPIKey() != "embedded-test-key" {
+		t.Fatal("embedded key must work without runtime environment")
+	}
+	t.Setenv("GEMINI_API_KEY", "runtime-test-key")
+	if resolveAPIKey() != "runtime-test-key" {
+		t.Fatal("runtime GEMINI_API_KEY must override embedded key")
+	}
+	t.Setenv("GEMINI_API_KEY", "")
+	bundledAPIKey = ""
+	t.Setenv("NANOBANANA_BUNDLE_KEY", "fallback-test-key")
+	if resolveAPIKey() != "fallback-test-key" {
+		t.Fatal("missing runtime fallback")
+	}
+}
+
 func TestParseArgs(t *testing.T) {
 	for _, args := range [][]string{
 		{"-m", "flash-lite", "a cat", "-a", "9:16"},

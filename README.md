@@ -20,7 +20,17 @@ export GEMINI_API_KEY="your-key"
 
 Run `./go/build.sh` again after changing Go source files. The output binary is `go/dist/nanobanana`.
 
-To bake an API key into the binary:
+To bake an API key from `.env` into the binary, put this in the repository's `.env` (or `go/.env`):
+
+```dotenv
+GEMINI_API_KEY="your-key"
+```
+
+Then run `./go/build.sh`. The resulting `go/dist/nanobanana` runs without `.env` or an API key environment variable on the destination machine.
+
+Build-time precedence is `NANOBANANA_BUNDLE_KEY` from the environment, then `GEMINI_API_KEY` from the environment, then the first existing file of `go/.env` and the repository `.env`. Within that file, `NANOBANANA_BUNDLE_KEY` takes priority over `GEMINI_API_KEY`. Quoted values, comments, and `export KEY=...` are supported; values are read literally without shell execution. `.env` files are ignored by Git.
+
+You can also supply the key directly through the build environment:
 
 ```bash
 NANOBANANA_BUNDLE_KEY="your-key" ./go/build.sh

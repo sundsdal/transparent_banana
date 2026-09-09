@@ -227,6 +227,16 @@ func run(ctx context.Context, o options, client generator, out io.Writer) error 
 	return nil
 }
 
+func resolveAPIKey() string {
+	if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+		return key
+	}
+	if bundledAPIKey != "" {
+		return bundledAPIKey
+	}
+	return os.Getenv("NANOBANANA_BUNDLE_KEY")
+}
+
 func main() {
 	o, err := parseArgs(os.Args[1:])
 	if err != nil {
@@ -237,13 +247,7 @@ func main() {
 		fmt.Print(help)
 		return
 	}
-	key := os.Getenv("GEMINI_API_KEY")
-	if key == "" {
-		key = bundledAPIKey
-	}
-	if key == "" {
-		key = os.Getenv("NANOBANANA_BUNDLE_KEY")
-	}
+	key := resolveAPIKey()
 	if key == "" {
 		fmt.Fprintln(os.Stderr, "Error: GEMINI_API_KEY environment variable is required")
 		os.Exit(1)
