@@ -91,5 +91,6 @@ Important:
 | Model | ID | Notes |
 |---|---|---|
 | **Nano Banana 2** (default) | `gemini-3.1-flash-image` | Balanced quality and speed |
+| Nano Banana 2 Lite | `gemini-3.1-flash-lite-image` | Fast and economical, 1K output |
 | Nano Banana Pro | `gemini-3-pro-image` | Highest quality, uses advanced reasoning |
 | Gemini 2.5 Flash | `gemini-2.5-flash-image` | Legacy |

@@ -41,9 +41,10 @@ def extract_image_from_response(response) -> Image.Image:
 ASPECT_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
 
 MODELS = {
-    "flash":   "gemini-3.1-flash-image",
-    "pro":     "gemini-3-pro-image",
-    "flash-2": "gemini-2.5-flash-image",
+    "flash":      "gemini-3.1-flash-image",
+    "flash-lite": "gemini-3.1-flash-lite-image",
+    "pro":        "gemini-3-pro-image",
+    "flash-2":    "gemini-2.5-flash-image",
 }
 
 
@@ -226,6 +227,7 @@ def main():
         description="Generate and edit images via Gemini.",
         epilog="""models:
   flash    gemini-3.1-flash-image  (default, fast)
+  flash-lite gemini-3.1-flash-lite-image (fastest)
   pro      gemini-3-pro-image      (highest quality)
   flash-2  gemini-2.5-flash-image            (legacy)
 
@@ -253,7 +255,7 @@ examples:
     parser.add_argument("-i", "--input", default=None, help="Input image(s) to edit (comma-separated)")
     parser.add_argument("-o", "--output", default="output.png", help="Output file path (default: output.png)")
     parser.add_argument("-m", "--model", default=DEFAULT_MODEL,
-                        help="Model alias (flash, pro, flash-2) or full ID")
+                        help="Model alias (flash, flash-lite, pro, flash-2) or full ID")
     parser.add_argument("-a", "--aspect", choices=ASPECT_RATIOS, default=None, metavar="RATIO",
                         help="Aspect ratio (e.g. 16:9, 1:1, 9:16)")
     parser.add_argument("--transparent", action="store_true", help="Enable transparency via difference matting")
