@@ -44,14 +44,14 @@ Based on the mode, gather the needed information conversationally:
 ### For Generate mode:
 - **Prompt** (required): What to generate (e.g., "a futuristic helmet", "a glass vase with flowers")
 - **Output path** (optional, default: output.png): Where to save the result
-- **Model** (optional, default: gemini-3-pro-image-preview): Which Gemini model to use
+- **Model** (optional, default: gemini-3.1-flash-image): Which Gemini model to use
 - **Save intermediates** (optional, default: no): Whether to save the white/black intermediate images
 
 ### For Extract mode:
 - **Input image path** (required): Path to the source image
 - **Prompt** (required): What object to extract (e.g., "the vase", "the person on the left")
 - **Output path** (optional, default: output.png)
-- **Model** (optional, default: gemini-3-pro-image-preview)
+- **Model** (optional, default: gemini-3.1-flash-image)
 - **Save intermediates** (optional, default: no)
 
 ### For Alpha only mode:
@@ -90,5 +90,7 @@ Important:
 
 | Model | ID | Notes |
 |---|---|---|
-| **Gemini 3 Pro** (default) | `gemini-3-pro-image-preview` | Best quality, uses advanced reasoning |
-| Gemini 2.5 Flash | `gemini-2.5-flash-image` | Faster, good for high-volume tasks |
+| **Nano Banana 2** (default) | `gemini-3.1-flash-image` | Balanced quality and speed |
+| Nano Banana 2 Lite | `gemini-3.1-flash-lite-image` | Fast and economical, 1K output |
+| Nano Banana Pro | `gemini-3-pro-image` | Highest quality, uses advanced reasoning |
+| Gemini 2.5 Flash | `gemini-2.5-flash-image` | Legacy |
