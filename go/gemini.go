@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const defaultGeminiBaseURL = "https://generativelanguage.googleapis.com/v1beta"
@@ -55,14 +57,34 @@ type geminiImageConfig struct {
 }
 
 type geminiResponse struct {
-	Candidates []struct {
-		Content struct {
-			Parts []struct {
-				Thought    bool              `json:"thought"`
-				InlineData *geminiInlineData `json:"inlineData"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
+	PromptFeedback geminiPromptFeedback `json:"promptFeedback"`
+	Candidates     []geminiCandidate    `json:"candidates"`
+}
+
+type geminiPromptFeedback struct {
+	BlockReason        string               `json:"blockReason"`
+	BlockReasonMessage string               `json:"blockReasonMessage"`
+	SafetyRatings      []geminiSafetyRating `json:"safetyRatings"`
+}
+
+type geminiCandidate struct {
+	Content struct {
+		Parts []geminiResponsePart `json:"parts"`
+	} `json:"content"`
+	FinishReason  string               `json:"finishReason"`
+	SafetyRatings []geminiSafetyRating `json:"safetyRatings"`
+}
+
+type geminiResponsePart struct {
+	Thought    bool              `json:"thought"`
+	Text       string            `json:"text"`
+	InlineData *geminiInlineData `json:"inlineData"`
+}
+
+type geminiSafetyRating struct {
+	Category    string `json:"category"`
+	Probability string `json:"probability"`
+	Blocked     bool   `json:"blocked"`
 }
 
 type geminiAPIError struct {
@@ -148,7 +170,7 @@ func (c *geminiClient) generate(ctx context.Context, model, prompt string, image
 		if message == "" {
 			message = http.StatusText(resp.StatusCode)
 		}
-		message = strings.ReplaceAll(message, c.apiKey, "[REDACTED]")
+		message = c.redact(message)
 		return imageData{}, fmt.Errorf("Gemini API returned %s: %s", resp.Status, message)
 	}
 
@@ -171,5 +193,80 @@ func (c *geminiClient) generate(ctx context.Context, model, prompt string, image
 			return imageData{Data: data, MIMEType: part.InlineData.MIMEType}, nil
 		}
 	}
+	diagnostics := c.responseDiagnostics(decoded)
+	if diagnostics != "" {
+		return imageData{}, fmt.Errorf("Gemini response did not contain an image: %s", c.redact(diagnostics))
+	}
 	return imageData{}, fmt.Errorf("Gemini response did not contain an image")
+}
+
+const maxGeminiDiagnosticLength = 800
+
+func (c *geminiClient) redact(value string) string {
+	if c.apiKey == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, c.apiKey, "[REDACTED]")
+}
+
+func (c *geminiClient) responseDiagnostics(response geminiResponse) string {
+	var diagnostics []string
+	feedback := response.PromptFeedback
+	if feedback.BlockReason != "" {
+		diagnostics = append(diagnostics, "prompt blocked: "+feedback.BlockReason)
+	}
+	if feedback.BlockReasonMessage != "" {
+		diagnostics = append(diagnostics, "prompt feedback: "+c.boundedDiagnostic(feedback.BlockReasonMessage))
+	}
+	if ratings := safetyRatingsDiagnostic(feedback.SafetyRatings); ratings != "" {
+		diagnostics = append(diagnostics, "prompt safety ratings: "+ratings)
+	}
+	for _, candidate := range response.Candidates {
+		if candidate.FinishReason != "" {
+			diagnostics = append(diagnostics, "candidate finish reason: "+candidate.FinishReason)
+		}
+		if ratings := safetyRatingsDiagnostic(candidate.SafetyRatings); ratings != "" {
+			diagnostics = append(diagnostics, "candidate safety ratings: "+ratings)
+		}
+		for _, part := range candidate.Content.Parts {
+			if !part.Thought && strings.TrimSpace(part.Text) != "" {
+				diagnostics = append(diagnostics, "model text: "+strconv.Quote(c.boundedDiagnostic(part.Text)))
+			}
+		}
+	}
+	return c.boundedDiagnostic(strings.Join(diagnostics, "; "))
+}
+
+func safetyRatingsDiagnostic(ratings []geminiSafetyRating) string {
+	parts := make([]string, 0, len(ratings))
+	for _, rating := range ratings {
+		if rating.Category == "" && rating.Probability == "" && !rating.Blocked {
+			continue
+		}
+		entry := rating.Category
+		if rating.Probability != "" {
+			entry += " (" + rating.Probability + ")"
+		}
+		if rating.Blocked {
+			entry += " blocked"
+		}
+		parts = append(parts, entry)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func boundedDiagnostic(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) <= maxGeminiDiagnosticLength {
+		return value
+	}
+	end := maxGeminiDiagnosticLength
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + "…"
+}
+
+func (c *geminiClient) boundedDiagnostic(value string) string {
+	return boundedDiagnostic(c.redact(value))
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestGeminiGenerateSendsExpectedRequestAndParsesImage(t *testing.T) {
@@ -134,5 +135,89 @@ func TestGeminiGenerateHonorsContextCancellation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		close(release)
 		t.Fatal("generate did not honor context cancellation")
+	}
+}
+
+func TestGeminiGenerateReportsSafeNoImageDiagnostics(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "prompt blocked without candidates",
+			body: `{"promptFeedback":{"blockReason":"SAFETY","blockReasonMessage":"prompt violates policy"}}`,
+			want: []string{"prompt blocked: SAFETY", "prompt feedback: prompt violates policy"},
+		},
+		{
+			name: "candidate safety rejection",
+			body: `{"candidates":[{"finishReason":"SAFETY","safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"HIGH","blocked":true}],"content":{"parts":[]}}]}`,
+			want: []string{"candidate finish reason: SAFETY", "HARM_CATEGORY_DANGEROUS_CONTENT (HIGH) blocked"},
+		},
+		{
+			name: "text only response redacts key and ignores thought",
+			body: `{"candidates":[{"content":{"parts":[{"thought":true,"text":"private-api-key hidden reasoning"},{"text":"Cannot create that image: private-api-key"}]}}]}`,
+			want: []string{"model text: \"Cannot create that image: [REDACTED]\""},
+		},
+		{
+			name: "empty response remains generic",
+			body: `{"candidates":[]}`,
+			want: nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			_, err := (&geminiClient{apiKey: "private-api-key", baseURL: server.URL, httpClient: server.Client()}).generate(context.Background(), "model", "prompt", nil, "")
+			if err == nil {
+				t.Fatal("generate unexpectedly succeeded")
+			}
+			if strings.Contains(err.Error(), "private-api-key") {
+				t.Fatalf("unredacted diagnostic: %v", err)
+			}
+			if strings.Contains(err.Error(), "hidden reasoning") {
+				t.Fatalf("thought text leaked into diagnostic: %v", err)
+			}
+			if len(test.want) == 0 {
+				if got, want := err.Error(), "Gemini response did not contain an image"; got != want {
+					t.Fatalf("error = %q, want %q", got, want)
+				}
+				return
+			}
+			for _, want := range test.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %q, missing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestGeminiDiagnosticsRedactsBeforeTruncating(t *testing.T) {
+	key := "unique-secret-key"
+	response := geminiResponse{Candidates: []geminiCandidate{{}}}
+	response.Candidates[0].Content.Parts = []geminiResponsePart{{
+		Text: strings.Repeat("a", maxGeminiDiagnosticLength-5) + key,
+	}}
+	diagnostic := (&geminiClient{apiKey: key}).responseDiagnostics(response)
+	if strings.Contains(diagnostic, "unique") || strings.Contains(diagnostic, key) {
+		t.Fatalf("credential fragment leaked at truncation boundary: %q", diagnostic)
+	}
+}
+
+func TestGeminiDiagnosticsAreUTF8SafeAndIncludeAllSafetyRatings(t *testing.T) {
+	if got := boundedDiagnostic(strings.Repeat("あ", 400)); !utf8.ValidString(got) {
+		t.Fatalf("truncated diagnostic is invalid UTF-8: %q", got)
+	}
+	ratings := []geminiSafetyRating{
+		{Category: "ONE"}, {Category: "TWO"}, {Category: "THREE"}, {Category: "FOUR"}, {Category: "FIVE"},
+	}
+	if got := safetyRatingsDiagnostic(ratings); !strings.Contains(got, "FIVE") {
+		t.Fatalf("fifth safety rating omitted: %q", got)
 	}
 }
