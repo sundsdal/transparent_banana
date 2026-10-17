@@ -196,6 +196,9 @@ func decodeImageResponse(body []byte) (imageGenerationResult, error) {
 		for _, part := range content.Parts {
 			if part.Text != "" {
 				result.Segments = append(result.Segments, imageSegment{Kind: "text", Text: part.Text, Thought: part.Thought})
+				if !part.Thought && strings.TrimSpace(part.Text) != "" {
+					diagnostics = append(diagnostics, "model text: "+part.Text)
+				}
 			}
 			if part.InlineData == nil || part.InlineData.Data == "" || !strings.HasPrefix(strings.ToLower(part.InlineData.MIMEType), "image/") {
 				continue
@@ -226,7 +229,7 @@ func decodeImageResponse(body []byte) (imageGenerationResult, error) {
 			result.Segments = nil
 		}
 	}
-	result.Diagnostics = boundedDiagnostic(strings.Join(diagnostics, "; "))
+	result.Diagnostics = strings.Join(diagnostics, "; ")
 	return result, nil
 }
 
@@ -395,6 +398,7 @@ func groundingSources(metadata json.RawMessage) []groundingSource {
 				URI, Title string
 			} `json:"web"`
 			Image struct {
+				SourceURI string `json:"sourceUri"`
 				URI       string `json:"uri"`
 				SourceURL string `json:"sourceUrl"`
 				PageURL   string `json:"pageUrl"`
@@ -420,7 +424,9 @@ func groundingSources(metadata json.RawMessage) []groundingSource {
 	}
 	for _, chunk := range value.GroundingChunks {
 		add(chunk.Web.URI, chunk.Web.Title)
-		if chunk.Image.URI != "" {
+		if chunk.Image.SourceURI != "" {
+			add(chunk.Image.SourceURI, chunk.Image.Title)
+		} else if chunk.Image.URI != "" {
 			add(chunk.Image.URI, chunk.Image.Title)
 		} else if chunk.Image.PageURL != "" {
 			add(chunk.Image.PageURL, chunk.Image.Title)

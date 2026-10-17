@@ -59,7 +59,7 @@ func TestAdvancedImageHTTPTextOnlyAndSafety(t *testing.T) {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		_, _ = io.Copy(io.Discard, r.Body)
-		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"answer","thoughtSignature":"secret-thought"}]}}]}`)
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"private reasoning"},{"text":"I cannot create that image.","thoughtSignature":"secret-thought"}]}}]}`)
 	}))
 	defer server.Close()
 	client := &geminiClient{apiKey: "private-key", baseURL: server.URL, httpClient: server.Client()}
@@ -69,8 +69,66 @@ func TestAdvancedImageHTTPTextOnlyAndSafety(t *testing.T) {
 		t.Fatalf("text-only result = %+v, %v", result, err)
 	}
 	_, err = client.generateImageAdvanced(context.Background(), imageGenerationRequest{Model: defaultModel, Contents: []json.RawMessage{content}})
-	if err == nil || !strings.Contains(err.Error(), "did not contain an image") {
+	if err == nil || !strings.Contains(err.Error(), "did not contain an image") || !strings.Contains(err.Error(), "I cannot create that image.") || strings.Contains(err.Error(), "private reasoning") {
 		t.Fatalf("image-only text result error = %v", err)
+	}
+}
+
+func TestAdvancedImageNoImageDiagnosticRedactsBeforeTruncation(t *testing.T) {
+	const key = "private-key"
+	// The key crosses the diagnostic limit, where truncating first would leak its prefix.
+	explanation := strings.Repeat("x", maxGeminiDiagnosticLength-len("model text: ")-3) + key + " cannot generate"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"candidates": []any{map[string]any{
+			"content": map[string]any{"parts": []any{map[string]any{"text": explanation}}},
+		}}})
+	}))
+	defer server.Close()
+	client := &geminiClient{apiKey: key, baseURL: server.URL, httpClient: server.Client()}
+	content := json.RawMessage(`{"role":"user","parts":[{"text":"image"}]}`)
+	_, err := client.generateImageAdvanced(context.Background(), imageGenerationRequest{Model: defaultModel, Contents: []json.RawMessage{content}})
+	if err == nil || !strings.Contains(err.Error(), "model text:") || strings.Contains(err.Error(), key[:3]) || len(err.Error()) > maxGeminiDiagnosticLength+100 {
+		t.Fatalf("no-image diagnostic = %v", err)
+	}
+}
+
+func TestCanonicalImageGroundingUsesContainingPage(t *testing.T) {
+	metadata := json.RawMessage(`{"groundingChunks":[
+		{"image":{"sourceUri":"https://example.com/source-page","imageUri":"https://cdn.example.com/raw.png","uri":"https://example.com/old-alias","title":"Source page"}},
+		{"image":{"imageUri":"https://cdn.example.com/raw-only.png","title":"No page"}},
+		{"web":{"uri":"https://example.com/web-page","title":"Web page"}},
+		{"image":{"sourceUrl":"https://example.com/legacy-page","title":"Legacy page"}}
+	]}`)
+	sources := groundingSources(metadata)
+	want := []string{"https://example.com/source-page", "https://example.com/web-page", "https://example.com/legacy-page"}
+	if len(sources) != len(want) {
+		t.Fatalf("sources = %+v", sources)
+	}
+	for i, source := range sources {
+		if source.URL != want[i] {
+			t.Fatalf("source %d = %+v, want %q", i, source, want[i])
+		}
+	}
+	result := imageGenerationResult{Grounding: metadata}
+	path := filepath.Join(t.TempDir(), "grounding.html")
+	if err := saveGrounding(path, result); err != nil {
+		t.Fatal(err)
+	}
+	page, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cli bytes.Buffer
+	printGroundingSources(&cli, result)
+	for _, containingPage := range want {
+		if !strings.Contains(string(page), containingPage) || !strings.Contains(cli.String(), "Source: "+containingPage+"\n") {
+			t.Fatalf("missing containing page %q in HTML or CLI output: %q, %q", containingPage, page, cli.String())
+		}
+	}
+	for _, excluded := range []string{"raw.png", "raw-only.png", "old-alias"} {
+		if strings.Contains(string(page), excluded) || strings.Contains(cli.String(), excluded) {
+			t.Fatalf("unexpected image asset or superseded alias %q in HTML or CLI output: %q, %q", excluded, page, cli.String())
+		}
 	}
 }
 
