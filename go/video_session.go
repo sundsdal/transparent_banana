@@ -201,10 +201,20 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 	if err != nil {
 		return err
 	}
+	if result.VideoStream != nil {
+		defer result.VideoStream.Close()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := saveVideo(o.output, result.Video); err != nil {
+	if result.VideoStream != nil {
+		downloadStart := time.Now()
+		err = saveVideoStream(ctx, o.output, result.VideoStream)
+		apiTime += time.Since(downloadStart)
+	} else {
+		err = saveVideo(o.output, result.Video)
+	}
+	if err != nil {
 		return err
 	}
 	if o.responseJSON != "" {

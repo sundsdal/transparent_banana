@@ -81,10 +81,12 @@ type videoGenerationRequest struct {
 
 type videoGenerationResult struct {
 	Video         []byte
+	VideoStream   io.ReadCloser // The caller owns and must close URI download streams.
 	InteractionID string
 	RawResponse   []byte
 }
 
+// generateVideo preserves the legacy []byte interface; the advanced CLI streams URI downloads to disk.
 func (c *geminiClient) generateVideo(ctx context.Context, model, prompt string, images []imageData, aspect, resolution, duration string) ([]byte, error) {
 	parts := make([]omniInput, 0, len(images))
 	for _, image := range images {
@@ -98,6 +100,17 @@ func (c *geminiClient) generateVideo(ctx context.Context, model, prompt string, 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if result.VideoStream != nil {
+		defer result.VideoStream.Close()
+		video, err := io.ReadAll(result.VideoStream)
+		if err != nil {
+			return nil, fmt.Errorf("read Gemini video: %w", err)
+		}
+		if len(video) == 0 {
+			return nil, errors.New("Gemini returned an empty video file")
+		}
+		return video, nil
 	}
 	return result.Video, nil
 }
@@ -168,11 +181,11 @@ func (c *geminiClient) generateVideoAdvanced(ctx context.Context, request videoG
 				continue
 			}
 			if part.URI != "" {
-				video, err := c.downloadVideoFile(ctx, part.URI)
+				stream, err := c.openVideoFile(ctx, part.URI)
 				if err != nil {
 					return videoGenerationResult{}, err
 				}
-				return videoGenerationResult{Video: video, InteractionID: result.ID, RawResponse: raw}, nil
+				return videoGenerationResult{VideoStream: stream, InteractionID: result.ID, RawResponse: raw}, nil
 			}
 			if part.Data != "" {
 				data, err := base64.StdEncoding.DecodeString(part.Data)
@@ -264,7 +277,7 @@ func (c *geminiClient) videoStatusError(response *http.Response) error {
 	return fmt.Errorf("Gemini video API returned %s: %s", response.Status, c.boundedDiagnostic(message))
 }
 
-func (c *geminiClient) downloadVideoFile(ctx context.Context, uri string) ([]byte, error) {
+func (c *geminiClient) openVideoFile(ctx context.Context, uri string) (io.ReadCloser, error) {
 	parsed, err := url.Parse(uri)
 	if err != nil {
 		return nil, errors.New("Gemini returned an invalid video file URI")
@@ -310,18 +323,15 @@ func (c *geminiClient) downloadVideoFile(ctx context.Context, uri string) ([]byt
 			if err != nil {
 				return nil, err
 			}
-			defer response.Body.Close()
 			if err := c.videoStatusError(response); err != nil {
+				response.Body.Close()
 				return nil, err
 			}
-			data, err := io.ReadAll(response.Body)
-			if err != nil {
-				return nil, fmt.Errorf("read Gemini video: %w", err)
+			if err := ctx.Err(); err != nil {
+				response.Body.Close()
+				return nil, err
 			}
-			if len(data) == 0 {
-				return nil, errors.New("Gemini returned an empty video file")
-			}
-			return data, nil
+			return response.Body, nil
 		case "PROCESSING":
 			timer := time.NewTimer(5 * time.Second)
 			select {
@@ -338,6 +348,38 @@ func (c *geminiClient) downloadVideoFile(ctx context.Context, uri string) ([]byt
 			return nil, fmt.Errorf("Gemini video file has unexpected state: %s", c.boundedDiagnostic(file.State))
 		}
 	}
+}
+
+func saveVideoStream(ctx context.Context, path string, source io.Reader) error {
+	if !strings.EqualFold(filepath.Ext(path), ".mp4") {
+		return errors.New("video output must have a .mp4 extension")
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".nanobanana-video-*")
+	if err != nil {
+		return fmt.Errorf("create video output: %w", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	size, err := io.Copy(file, source)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("copy video output: %w", err)
+	}
+	if size == 0 {
+		return errors.New("Gemini returned an empty video file")
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close video output: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("save video output: %w", err)
+	}
+	return nil
 }
 
 func saveVideo(path string, data []byte) error {

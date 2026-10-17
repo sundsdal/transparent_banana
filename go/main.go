@@ -237,6 +237,11 @@ func parseArgs(args []string) (options, error) {
 	if o.aspect != "" && !containsValue(validAspects, o.aspect) {
 		return o, fmt.Errorf("unsupported aspect ratio: %s", o.aspect)
 	}
+	if collision, err := responseJSONInputCollision(o); err != nil {
+		return o, err
+	} else if collision {
+		return o, errors.New("response JSON path must differ from media inputs")
+	}
 	if o.video {
 		if o.transparent || o.intermediates {
 			return o, errors.New("transparent output and intermediates are image-only options")
@@ -323,6 +328,19 @@ func parseArgs(args []string) (options, error) {
 		return o, errors.New("response JSON path must differ from session")
 	}
 	return o, nil
+}
+
+func responseJSONInputCollision(o options) (bool, error) {
+	if o.responseJSON == "" {
+		return false, nil
+	}
+	inputs := []string{o.firstFrame, o.lastFrame}
+	if o.input != "" {
+		for _, raw := range strings.Split(o.input, ",") {
+			inputs = append(inputs, strings.TrimSpace(raw))
+		}
+	}
+	return pathsCollide(o.responseJSON, inputs...)
 }
 
 func imageArtifactCollision(o options, path string) (bool, error) {

@@ -167,6 +167,33 @@ func TestImageArtifactPathCollisions(t *testing.T) {
 	}
 }
 
+func TestResponseJSONCannotOverwriteMediaInputs(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"image input in comma list", []string{"prompt", "-i", "first.png, second.jpg ,third.pdf", "--response-json", "nested/../second.jpg"}},
+		{"repeated image input", []string{"prompt", "-i", "first.png", "-i", "second.pdf", "--response-json", filepath.Join(wd, "second.pdf")}},
+		{"video input", []string{"prompt", "--video", "-i", "clip.mp4", "--response-json", filepath.Join(wd, "clip.mp4")}},
+		{"video PDF input", []string{"prompt", "--video", "-i", "reference.pdf", "--response-json", "./reference.pdf"}},
+		{"first frame", []string{"prompt", "--video", "--first-frame", "first.png", "--response-json", filepath.Join(wd, "first.png")}},
+		{"last frame", []string{"prompt", "--video", "--first-frame", "first.png", "--last-frame", "last.png", "--response-json", "sub/../last.png"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseArgs(tc.args); err == nil || !strings.Contains(err.Error(), "response JSON path must differ from media inputs") {
+				t.Fatalf("parseArgs(%q) error = %v", tc.args, err)
+			}
+		})
+	}
+	if _, err := parseArgs([]string{"prompt", "--video", "-i", "clip.mp4", "--first-frame", "frame.png", "--response-json", "response.json"}); err != nil {
+		t.Fatalf("distinct response JSON path rejected: %v", err)
+	}
+}
+
 type fakeVideoGenerator struct {
 	fakeGenerator
 	videoCalls []struct {

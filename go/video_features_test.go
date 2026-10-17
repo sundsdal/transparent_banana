@@ -261,6 +261,184 @@ func TestVideoSessionDoesNotAdvanceAfterDownloadFailure(t *testing.T) {
 	}
 }
 
+type videoRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f videoRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type observedVideoBody struct {
+	io.ReadCloser
+	onFirstRead func()
+	onClose     func()
+	readCount   int
+}
+
+func (body *observedVideoBody) Read(data []byte) (int, error) {
+	if body.readCount == 0 && body.onFirstRead != nil {
+		body.onFirstRead()
+	}
+	body.readCount++
+	if len(data) > 1024 {
+		data = data[:1024]
+	}
+	return body.ReadCloser.Read(data)
+}
+
+func (body *observedVideoBody) Close() error {
+	if body.onClose != nil {
+		body.onClose()
+	}
+	return body.ReadCloser.Close()
+}
+
+func videoClientWithObservedDownload(server *httptest.Server, observe func(io.ReadCloser) io.ReadCloser) *http.Client {
+	client := server.Client()
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = videoRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		response, err := transport.RoundTrip(request)
+		if err == nil && strings.HasSuffix(request.URL.Path, ":download") {
+			response.Body = observe(response.Body)
+		}
+		return response, err
+	})
+	return client
+}
+
+func TestVideoURIDownloadStreamsBeforeSavingSession(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "movie.mp4")
+	sessionPath := filepath.Join(dir, "session.json")
+	responsePath := filepath.Join(dir, "raw.json")
+	payload := bytes.Repeat([]byte("m"), 64*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1beta/interactions":
+			_, _ = io.WriteString(w, `{"id":"new-id","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","uri":"https://generativelanguage.googleapis.com/v1beta/files/movie:download?alt=media"}]}]}`)
+		case "/v1beta/files/movie":
+			_, _ = io.WriteString(w, `{"state":"ACTIVE"}`)
+		case "/v1beta/files/movie:download":
+			_, _ = w.Write(payload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	var stream *observedVideoBody
+	var sawTemp, closed bool
+	client := &geminiClient{apiKey: "key", baseURL: server.URL + "/v1beta", httpClient: videoClientWithObservedDownload(server, func(body io.ReadCloser) io.ReadCloser {
+		stream = &observedVideoBody{ReadCloser: body, onFirstRead: func() {
+			temps, err := filepath.Glob(filepath.Join(dir, ".nanobanana-video-*"))
+			if err != nil {
+				t.Error(err)
+			}
+			sawTemp = len(temps) == 1
+		}, onClose: func() { closed = true }}
+		return stream
+	})}
+	o := options{video: true, model: defaultVideoModel, prompt: "movie", output: output, session: sessionPath, responseJSON: responsePath}
+	if err := runAdvancedVideo(context.Background(), o, client, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(output)
+	if err != nil || !bytes.Equal(stored, payload) || !sawTemp || !closed || stream == nil || stream.readCount < 2 {
+		t.Fatalf("streamed output: size %d, reads %v, temp before read %t, closed %t, error %v", len(stored), stream, sawTemp, closed, err)
+	}
+	session, err := loadVideoSession(sessionPath, defaultVideoModel)
+	if err != nil || session.LastInteractionID != "new-id" {
+		t.Fatalf("saved session: %+v, %v", session, err)
+	}
+	raw, err := os.ReadFile(responsePath)
+	if err != nil || !bytes.Contains(raw, []byte(`"new-id"`)) {
+		t.Fatalf("saved response JSON: %q, %v", raw, err)
+	}
+	if temps, err := filepath.Glob(filepath.Join(dir, ".nanobanana-video-*")); err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files after success: %v, %v", temps, err)
+	}
+}
+
+func TestVideoURIDownloadFailuresPreserveOutputAndSession(t *testing.T) {
+	for _, scenario := range []struct {
+		name, want string
+		cancel     bool
+		empty      bool
+	}{
+		{name: "truncated", want: "copy video output"},
+		{name: "canceled", want: "context canceled", cancel: true},
+		{name: "empty", want: "empty video file", empty: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			dir := t.TempDir()
+			output := filepath.Join(dir, "movie.mp4")
+			sessionPath := filepath.Join(dir, "session.json")
+			responsePath := filepath.Join(dir, "raw.json")
+			if err := os.WriteFile(output, []byte("old video"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(responsePath, []byte("old response"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := saveVideoSession(sessionPath, videoSession{Kind: "video", Version: 1, Model: defaultVideoModel, LastInteractionID: "old-id"}); err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1beta/interactions":
+					_, _ = io.WriteString(w, `{"id":"new-id","status":"completed","steps":[{"type":"model_output","content":[{"type":"video","mime_type":"video/mp4","uri":"https://generativelanguage.googleapis.com/v1beta/files/movie:download?alt=media"}]}]}`)
+				case "/v1beta/files/movie":
+					_, _ = io.WriteString(w, `{"state":"ACTIVE"}`)
+				case "/v1beta/files/movie:download":
+					if scenario.empty {
+						return
+					}
+					if scenario.cancel {
+						_, _ = w.Write(bytes.Repeat([]byte("m"), 64*1024))
+						return
+					}
+					w.Header().Set("Content-Length", "4096")
+					_, _ = io.WriteString(w, "partial")
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var closed bool
+			client := &geminiClient{apiKey: "key", baseURL: server.URL + "/v1beta", httpClient: videoClientWithObservedDownload(server, func(body io.ReadCloser) io.ReadCloser {
+				return &observedVideoBody{ReadCloser: body, onFirstRead: func() {
+					if scenario.cancel {
+						cancel()
+					}
+				}, onClose: func() { closed = true }}
+			})}
+			o := options{video: true, model: defaultVideoModel, prompt: "movie", output: output, session: sessionPath, responseJSON: responsePath}
+			err := runAdvancedVideo(ctx, o, client, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), scenario.want) || !closed {
+				t.Fatalf("download failure = %v, stream closed %t", err, closed)
+			}
+			stored, err := os.ReadFile(output)
+			if err != nil || string(stored) != "old video" {
+				t.Fatalf("output after failure: %q, %v", stored, err)
+			}
+			raw, err := os.ReadFile(responsePath)
+			if err != nil || string(raw) != "old response" {
+				t.Fatalf("response after failure: %q, %v", raw, err)
+			}
+			session, err := loadVideoSession(sessionPath, defaultVideoModel)
+			if err != nil || session.LastInteractionID != "old-id" {
+				t.Fatalf("session after failure: %+v, %v", session, err)
+			}
+			if temps, err := filepath.Glob(filepath.Join(dir, ".nanobanana-video-*")); err != nil || len(temps) != 0 {
+				t.Fatalf("temporary files after failure: %v, %v", temps, err)
+			}
+		})
+	}
+}
+
 func TestVideoRolePromptNumbersEachMediaType(t *testing.T) {
 	parts := []omniInput{{Type: "image"}, {Type: "image"}, {Type: "video"}, {Type: "image"}, {Type: "video"}}
 	got := videoRolePrompt("animate", "reference_to_video", "", parts, 2)
