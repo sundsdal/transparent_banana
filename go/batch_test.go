@@ -209,3 +209,53 @@ func TestBatchExtractDirectResponseAndInlineResults(t *testing.T) {
 		t.Fatalf("inline raw file permissions: %v %v", info, err)
 	}
 }
+
+func TestBatchExtractLargeRecordAndFinalLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.jsonl")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(data []byte) {
+		t.Helper()
+		if _, err := file.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write([]byte(`{"key":"large","padding":"`))
+	padding := bytes.Repeat([]byte("x"), 1024*1024)
+	for range 64 {
+		write(padding)
+	}
+	image := fixtureImage(t, color.NRGBA{R: 200, A: 255})
+	write([]byte(`","response":{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"` + base64.StdEncoding.EncodeToString(image.Data) + `"}}]}}]}}` + "\r\n"))
+	write([]byte("  \r\n"))
+	write([]byte(`{"key":"last","response":{"candidates":[{"content":{"parts":[{"text":"final answer"}]}}]}}`))
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	images, texts, failures, err := extractBatchResults(path, dir)
+	if err != nil || images != 1 || texts != 1 || failures != 0 {
+		t.Fatalf("large result: %d images, %d texts, %d failures, %v", images, texts, failures, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0001-large.png")); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(filepath.Join(dir, "0003-last.md"))
+	if err != nil || !strings.Contains(string(text), "final answer") {
+		t.Fatalf("final unterminated result: %q, %v", text, err)
+	}
+}
+
+func TestBatchExtractMalformedFinalLineReportsPhysicalLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "malformed.jsonl")
+	if err := os.WriteFile(path, []byte("{}\r\n\n{\"key\":\"broken\","), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	images, texts, failures, err := extractBatchResults(path, dir)
+	if images != 0 || texts != 0 || failures != 1 || err == nil || !strings.Contains(err.Error(), "batch result line 3") {
+		t.Fatalf("malformed final result: %d images, %d texts, %d failures, %v", images, texts, failures, err)
+	}
+}

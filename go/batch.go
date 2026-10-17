@@ -416,10 +416,16 @@ func extractBatchResults(path, dir string) (images, texts, failures int, err err
 		return 0, 0, 0, err
 	}
 	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
-	for line := 1; scanner.Scan(); line++ {
-		data := bytes.TrimSpace(scanner.Bytes())
+	reader := bufio.NewReader(file)
+	for line := 1; ; line++ {
+		record, readErr := reader.ReadBytes('\n')
+		if readErr != nil && readErr != io.EOF {
+			return images, texts, failures, fmt.Errorf("read batch results: %w", readErr)
+		}
+		if len(record) == 0 && readErr == io.EOF {
+			break
+		}
+		data := bytes.TrimSpace(record)
 		if len(data) == 0 {
 			continue
 		}
@@ -469,9 +475,6 @@ func extractBatchResults(path, dir string) (images, texts, failures int, err err
 		if result.hasVisibleText() {
 			texts++
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return images, texts, failures, fmt.Errorf("read batch results: %w", err)
 	}
 	return images, texts, failures, nil
 }
