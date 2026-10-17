@@ -132,6 +132,41 @@ func TestParseAdvancedImageArgs(t *testing.T) {
 	}
 }
 
+func TestImageArtifactPathCollisions(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, flag, path string
+		extra                    []string
+		collision                bool
+	}{
+		{name: "manifest alias", output: "result.png", flag: "--response-json", path: "nested/../result.md", collision: true},
+		{name: "numbered image", output: "result.png", flag: "--session", path: "result-2.png", collision: true},
+		{name: "large image number", output: "result.JPG", flag: "--response-json", path: "result-123.JPG", collision: true},
+		{name: "empty stem numbered image alias", output: ".png", flag: "--response-json", path: "nested/../-2.png", collision: true},
+		{name: "dot stem numbered image", output: "..png", flag: "--session", path: ".-2.png", collision: true},
+		{name: "grounding without search", output: "result.png", flag: "--session", path: "result-grounding.html", collision: true},
+		{name: "thought markdown", output: "result.png", flag: "--response-json", path: "result-thoughts.md", extra: []string{"--include-thoughts"}, collision: true},
+		{name: "thought image", output: "result.png", flag: "--session", path: "result-thought-12.png", extra: []string{"--include-thoughts"}, collision: true},
+		{name: "transparent white", output: "result.png", flag: "--response-json", path: "result-white.png", extra: []string{"--transparent", "--save-intermediates"}, collision: true},
+		{name: "transparent black", output: "result.png", flag: "--response-json", path: "result-black.png", extra: []string{"--transparent", "--save-intermediates"}, collision: true},
+		{name: "transparent white grounding", output: "result.png", flag: "--response-json", path: "result-white-grounding.html", extra: []string{"--transparent"}, collision: true},
+		{name: "transparent black grounding", output: "result.png", flag: "--response-json", path: "result-black-grounding.html", extra: []string{"--transparent"}, collision: true},
+		{name: "transparent thought image", output: "result.png", flag: "--response-json", path: "result-thought-1.png", extra: []string{"--transparent", "--include-thoughts"}, collision: true},
+		{name: "inactive thought file", output: "result.png", flag: "--response-json", path: "result-thoughts.md"},
+		{name: "inactive intermediate", output: "result.png", flag: "--response-json", path: "result-white.png", extra: []string{"--transparent"}},
+		{name: "transparent single final image", output: "result.png", flag: "--response-json", path: "result-2.png", extra: []string{"--transparent"}},
+		{name: "noncanonical image number", output: "result.png", flag: "--response-json", path: "result-02.png"},
+		{name: "signed image number", output: "result.png", flag: "--response-json", path: "result-+2.png"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"prompt", "-o", tc.output, tc.flag, tc.path}, tc.extra...)
+			_, err := parseArgs(args)
+			if (err != nil) != tc.collision {
+				t.Fatalf("parseArgs(%q) error = %v, want collision %t", args, err, tc.collision)
+			}
+		})
+	}
+}
+
 type fakeVideoGenerator struct {
 	fakeGenerator
 	videoCalls []struct {

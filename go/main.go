@@ -307,17 +307,75 @@ func parseArgs(args []string) (options, error) {
 	if o.transparent && !strings.HasSuffix(output, ".png") {
 		return o, errors.New("transparent output requires a .png file")
 	}
-	if collision, err := sameLocalPath(o.session, o.output); err != nil {
+	if collision, err := imageArtifactCollision(o, o.session); err != nil {
 		return o, err
 	} else if collision {
-		return o, errors.New("session path must differ from image output")
+		return o, errors.New("session path must differ from image output artifacts")
 	}
-	if collision, err := pathsCollide(o.responseJSON, o.output, o.session); err != nil {
+	if collision, err := imageArtifactCollision(o, o.responseJSON); err != nil {
 		return o, err
 	} else if collision {
-		return o, errors.New("response JSON path must differ from image output and session")
+		return o, errors.New("response JSON path must differ from image output artifacts")
+	}
+	if collision, err := sameLocalPath(o.responseJSON, o.session); err != nil {
+		return o, err
+	} else if collision {
+		return o, errors.New("response JSON path must differ from session")
 	}
 	return o, nil
+}
+
+func imageArtifactCollision(o options, path string) (bool, error) {
+	if path == "" {
+		return false, nil
+	}
+	stem := strings.TrimSuffix(o.output, filepath.Ext(o.output))
+	artifacts := []string{o.output, stem + ".md"}
+	if o.transparent {
+		artifacts = append(artifacts, stem+"-white-grounding.html", stem+"-black-grounding.html")
+		if o.intermediates {
+			white, black := intermediatePaths(o.output)
+			artifacts = append(artifacts, white, black)
+		}
+	} else {
+		artifacts = append(artifacts, stem+"-grounding.html")
+	}
+	if o.includeThoughts {
+		artifacts = append(artifacts, stem+"-thoughts.md")
+	}
+	if collision, err := pathsCollide(path, artifacts...); err != nil || collision {
+		return collision, err
+	}
+	if !o.transparent {
+		if collision, err := numberedArtifactCollision(path, stem, filepath.Ext(o.output), 2); err != nil || collision {
+			return collision, err
+		}
+	}
+	if o.includeThoughts {
+		return numberedArtifactCollision(path, stem+"-thought", ".png", 1)
+	}
+	return false, nil
+}
+
+func numberedArtifactCollision(path, stem, ext string, first int) (bool, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve output path %q: %w", path, err)
+	}
+	absolutePrefix, err := filepath.Abs(stem + "-")
+	if err != nil {
+		return false, fmt.Errorf("resolve output path %q: %w", stem, err)
+	}
+	number, found := strings.CutPrefix(absolutePath, absolutePrefix)
+	if !found || !strings.HasSuffix(number, ext) {
+		return false, nil
+	}
+	number = strings.TrimSuffix(number, ext)
+	if number == "" {
+		return false, nil
+	}
+	index, err := strconv.Atoi(number)
+	return err == nil && index >= first && strconv.Itoa(index) == number, nil
 }
 
 func sameLocalPath(a, b string) (bool, error) {
