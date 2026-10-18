@@ -16,7 +16,8 @@ cp "$script_dir"/*.go "$script_dir/go.mod" "$temp_dir"/
 mkdir -p "$output_dir"
 (
     cd "$temp_dir"
-    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$output_dir/nanobanana" .
+    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$output_dir/generate" .
 )
 
-printf 'Built: %s\n' "$output_dir/nanobanana"
+ln -sfn generate "$output_dir/nanobanana"
+printf 'Built: %s\n' "$output_dir/generate"
