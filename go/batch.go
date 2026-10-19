@@ -17,10 +17,10 @@ import (
 )
 
 const batchHelp = `Usage:
-  generate batch submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]
-  generate batch status <batches/id>
-  generate batch download <batches/id> [--output-dir <directory>]
-  generate batch cancel <batches/id>
+  generate_media batch submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]
+  generate_media batch status <batches/id>
+  generate_media batch download <batches/id> [--output-dir <directory>]
+  generate_media batch cancel <batches/id>
 
 Each manifest line is {"key":"unique-name","request":{"contents":[...]}}.
 The request may include any GenerateContentRequest fields, such as generationConfig.
@@ -43,7 +43,7 @@ func (c *geminiClient) runBatch(ctx context.Context, args []string, out io.Write
 		return c.batchSubmit(ctx, args[1:], out)
 	case "status":
 		if len(args) != 2 {
-			return errors.New("usage: generate batch status <batches/id>")
+			return errors.New("usage: generate_media batch status <batches/id>")
 		}
 		name, err := validateBatchName(args[1])
 		if err != nil {
@@ -56,7 +56,7 @@ func (c *geminiClient) runBatch(ctx context.Context, args []string, out io.Write
 		return printBatchJSON(out, body)
 	case "cancel":
 		if len(args) != 2 {
-			return errors.New("usage: generate batch cancel <batches/id>")
+			return errors.New("usage: generate_media batch cancel <batches/id>")
 		}
 		name, err := validateBatchName(args[1])
 		if err != nil {
@@ -84,7 +84,7 @@ func validateBatchName(name string) (string, error) {
 
 func (c *geminiClient) batchSubmit(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: generate batch submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]")
+		return errors.New("usage: generate_media batch submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]")
 	}
 	path := args[0]
 	model := defaultModel
@@ -238,7 +238,7 @@ func printBatchJSON(out io.Writer, body []byte) error {
 
 func (c *geminiClient) batchDownload(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: generate batch download <batches/id> [--output-dir <directory>]")
+		return errors.New("usage: generate_media batch download <batches/id> [--output-dir <directory>]")
 	}
 	name, err := validateBatchName(args[0])
 	if err != nil {
@@ -247,7 +247,7 @@ func (c *geminiClient) batchDownload(ctx context.Context, args []string, out io.
 	dir := "."
 	if len(args) > 1 {
 		if len(args) != 3 || args[1] != "--output-dir" || args[2] == "" {
-			return errors.New("usage: generate batch download <batches/id> [--output-dir <directory>]")
+			return errors.New("usage: generate_media batch download <batches/id> [--output-dir <directory>]")
 		}
 		dir = args[2]
 	}

@@ -1,4 +1,4 @@
-# generate
+# generate_media
 
 Generate images and videos via Gemini. The Go CLI is a fast, standalone binary with no runtime dependencies. Images are the default: image mode accepts PNG, JPEG, GIF, WebP, HEIC, HEIF, PDF, and video inputs and writes PNG or JPEG output. Add `--video` to create an MP4 with Gemini Omni from a prompt, images, or uploaded video. Optionally produce a transparent PNG using difference matting.
 
@@ -15,14 +15,14 @@ Requires Go 1.23 or later.
 ```bash
 export GEMINI_API_KEY="your-key"
 ./build.sh
-./dist/generate "a cat with a hat"
+./dist/generate_media "a cat with a hat"
 ```
 
-Run `./build.sh` again after changing Go source files. It builds the Go CLI at `dist/generate` and retains `dist/nanobanana` for existing callers. `./go/build.sh` remains available when you only need its standalone output at `go/dist/generate`. To put the new command on your PATH:
+Run `./build.sh` again after changing Go source files. It builds the Go CLI at `dist/generate_media` and retains `dist/generate` and `dist/nanobanana` aliases for existing callers. `./go/build.sh` remains available when you only need its standalone output at `go/dist/generate_media`; that directory also gets both aliases. To put the new command on your PATH:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
-ln -s "$PWD/dist/generate" "$HOME/.local/bin/generate"
+ln -s "$PWD/dist/generate_media" "$HOME/.local/bin/generate_media"
 ```
 
 To bake an API key from `.env` into the binary, put this in the repository's `.env` (or `go/.env`):
@@ -31,7 +31,7 @@ To bake an API key from `.env` into the binary, put this in the repository's `.e
 GEMINI_API_KEY="your-key"
 ```
 
-Then run `./build.sh`. The resulting `dist/generate` runs without `.env` or an API key environment variable on the destination machine.
+Then run `./build.sh`. The resulting `dist/generate_media` runs without `.env` or an API key environment variable on the destination machine.
 
 Build-time precedence is `NANOBANANA_BUNDLE_KEY` from the environment, then `GEMINI_API_KEY` from the environment, then the first existing file of `go/.env` and the repository `.env`. Within that file, `NANOBANANA_BUNDLE_KEY` takes priority over `GEMINI_API_KEY`. Quoted values, comments, and `export KEY=...` are supported; values are read literally without shell execution. `.env` files are ignored by Git.
 
@@ -46,22 +46,22 @@ NANOBANANA_BUNDLE_KEY="your-key" ./build.sh
 ## Usage
 
 ```bash
-./dist/generate "a cat with a hat"                          # image → output.png
-./dist/generate "a glass vase" -o vase.png --transparent    # transparent PNG (two API calls)
-./dist/generate "a phone wallpaper" -a 9:16 -m pro          # aspect ratio + model
-./dist/generate -i photo.jpg "remove the background"        # edit an image
-./dist/generate -i photo.jpg "the vase" --transparent       # extract with transparency
-./dist/generate -i a.png,b.png "combine into one scene"     # multiple input images
-./dist/generate "a cat waving" --video --duration 8          # 8-second video → output.mp4
-./dist/generate -i photo.jpg "make this scene move" --video -a 16:9 --resolution 720p -o scene.mp4
-./dist/generate --video --first-frame start.png --last-frame end.png "pan from sunrise to dusk" -o transition.mp4
-./dist/generate --video -i source.mp4 "make the lighting warmer" --task edit -o warm.mp4
-./dist/generate --video -i source.mp4,character.png "continue with this character" --task extend -o extended.mp4
-./dist/generate --video --session clip.json "a cat waves" -o cat.mp4
-./dist/generate --video --session clip.json "make the cat orange" -o orange-cat.mp4
-./dist/generate --video --session clip.json "continue the action" --task extend -o longer-cat.mp4
-./dist/generate "a city at dusk" --image-size 4K --thinking high --search both --text
-./dist/generate "continue the composition" --session scene.json -i sketch.png
+./dist/generate_media "a cat with a hat"                          # image → output.png
+./dist/generate_media "a glass vase" -o vase.png --transparent    # transparent PNG (two API calls)
+./dist/generate_media "a phone wallpaper" -a 9:16 -m pro          # aspect ratio + model
+./dist/generate_media -i photo.jpg "remove the background"        # edit an image
+./dist/generate_media -i photo.jpg "the vase" --transparent       # extract with transparency
+./dist/generate_media -i a.png,b.png "combine into one scene"     # multiple input images
+./dist/generate_media "a cat waving" --video --duration 8          # 8-second video → output.mp4
+./dist/generate_media -i photo.jpg "make this scene move" --video -a 16:9 --resolution 720p -o scene.mp4
+./dist/generate_media --video --first-frame start.png --last-frame end.png "pan from sunrise to dusk" -o transition.mp4
+./dist/generate_media --video -i source.mp4 "make the lighting warmer" --task edit -o warm.mp4
+./dist/generate_media --video -i source.mp4,character.png "continue with this character" --task extend -o extended.mp4
+./dist/generate_media --video --session clip.json "a cat waves" -o cat.mp4
+./dist/generate_media --video --session clip.json "make the cat orange" -o orange-cat.mp4
+./dist/generate_media --video --session clip.json "continue the action" --task extend -o longer-cat.mp4
+./dist/generate_media "a city at dusk" --image-size 4K --thinking high --search both --text
+./dist/generate_media "continue the composition" --session scene.json -i sketch.png
 ```
 
 Video uses [Gemini Omni](https://ai.google.dev/gemini-api/docs/omni). Its default aspect ratio is `16:9` and default resolution is `720p`; use `--aspect 9:16` for portrait video. Set `--duration` to a whole number from 3 to 10 seconds (for example, `8` or `8s`), or omit it to use the API default. By default Omni infers whether to generate, edit, or extend from the prompt and inputs. Use `--task` only when you need to select that mode explicitly; the task can constrain the model. Image, video, and reference inputs are accepted through `-i`; PDFs and audio files are not accepted in video mode. `--transparent` and `--save-intermediates` apply only to images.
@@ -108,9 +108,9 @@ Gemini limits uploaded source videos for editing or extension to 10 seconds; gen
 | `flash-2` | `gemini-2.5-flash-image` | Legacy |
 | `omni` | `gemini-omni-1.1-flash` | Video; also selected by `--video` |
 
-Use Lite with `./dist/generate "a cat with a hat" -m flash-lite` when speed matters.
+Use Lite with `./dist/generate_media "a cat with a hat" -m flash-lite` when speed matters.
 
-For example, `./dist/generate "a cat with a hat" -m flash-lite --timings` measures where time is spent. Direct image generation uses one API call. Transparency uses two sequential calls because the black-background edit depends on the white-background result. Video generation can take multiple requests while Gemini prepares and serves the MP4.
+For example, `./dist/generate_media "a cat with a hat" -m flash-lite --timings` measures where time is spent. Direct image generation uses one API call. Transparency uses two sequential calls because the black-background edit depends on the white-background result. Video generation can take multiple requests while Gemini prepares and serves the MP4.
 
 Image generation saves every returned image: the first at `-o`, then `-2`, `-3`, and so on. If a response contains text or multiple images, an ordered Markdown result is saved beside the output. Search grounding creates a `-grounding.html` attribution file and prints source page URLs. Nano Banana 2.1 accepts up to 14 input images. Video inputs can be MP4, M4V, MPEG, MPG, MOV, AVI, FLV, WebM, WMV, or 3GP. In image mode, `--session` stores the model's original response content so later turns can reuse its thought signatures; it cannot be combined with `--transparent`. Uploaded Files API inputs expire after 48 hours; start a new image session if its earlier video, PDF, or large-image file references have expired.
 
@@ -120,13 +120,13 @@ Use [Gemini Batch API](https://ai.google.dev/gemini-api/docs/batch-api) for requ
 
 ```bash
 printf '%s\n' '{"key":"scene-1","request":{"contents":[{"role":"user","parts":[{"text":"A mountain at dawn"}]}],"generationConfig":{"responseModalities":["IMAGE"],"imageConfig":{"aspectRatio":"16:9","imageSize":"2K"}}}}' > requests.jsonl
-./dist/generate batch submit requests.jsonl --name mountain-scenes
-./dist/generate batch status batches/ID
-./dist/generate batch download batches/ID --output-dir results
-./dist/generate batch cancel batches/ID
+./dist/generate_media batch submit requests.jsonl --name mountain-scenes
+./dist/generate_media batch status batches/ID
+./dist/generate_media batch download batches/ID --output-dir results
+./dist/generate_media batch cancel batches/ID
 ```
 
-Use the batch name returned by `submit` in place of `batches/ID`. Download saves the raw results JSONL and extracts visible images and text. Run `./dist/generate batch --help` for command details.
+Use the batch name returned by `submit` in place of `batches/ID`. Download saves the raw results JSONL and extracts visible images and text. Run `./dist/generate_media batch --help` for command details.
 
 On an Apple M2, ten warm `--help` runs had median startup times of **5 ms for Go** and **543 ms for Python** with dependencies already installed. The stripped Go binary was **6.4 MiB**. A synthetic 1024×1024 difference-matting benchmark, including PNG decoding and encoding, took **28 ms/op**. These local measurements exclude network and model latency; they are not end-to-end generation speed claims.
 
