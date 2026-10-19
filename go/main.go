@@ -20,6 +20,17 @@ var bundledAPIKey string
 const defaultModel = "gemini-nano-banana-2.1"
 const defaultVideoModel = "gemini-omni-1.1-flash"
 
+const shortHelp = `generate_media — Generate images and videos via Gemini.
+
+Usage: generate_media [options] <prompt>
+       generate_media batch <submit|status|download|cancel> ...
+
+Examples:
+  generate_media "a cat with a hat"
+  generate_media "a cat waving" --video --duration 8
+Run 'generate_media --help' for full options and examples.
+`
+
 var models = map[string]string{
 	"flash":      defaultModel,
 	"flash-lite": "gemini-3.1-flash-lite-image",
@@ -28,10 +39,10 @@ var models = map[string]string{
 	"omni":       defaultVideoModel,
 }
 
-const help = `generate — Generate images and videos via Gemini.
+const help = `generate_media — Generate images and videos via Gemini.
 
-Usage: generate [options] <prompt> [options]
-       generate batch <submit|status|download|cancel> ... (see generate batch --help)
+Usage: generate_media [options] <prompt> [options]
+       generate_media batch <submit|status|download|cancel> ... (see generate_media batch --help)
 
 Options:
   -i, --input <paths>       Images or videos; image mode also supports PDF
@@ -73,16 +84,16 @@ Image aspect ratios:
 Video aspect ratios: 16:9 9:16
 
 Examples:
-  generate "a cat with a hat" --image-size 2K
-  generate -i photo.jpg "remove the background"
-  generate "a glass vase" --transparent -o vase.png
-  generate -i a.png,b.png "combine these into one scene"
-  generate "a cat waving" --video --duration 8 --resolution 720p
-  generate -i photo.jpg "make this scene move" --video -o scene.mp4
-  generate --video --session clip.json "a cat waves" -o cat.mp4
-  generate --video --session clip.json "make the cat orange" -o orange-cat.mp4
-  generate --video --session clip.json --task extend "continue it" -o longer.mp4
-  generate --video --first-frame start.png --last-frame end.png "pan across the scene"
+  generate_media "a cat with a hat" --image-size 2K
+  generate_media -i photo.jpg "remove the background"
+  generate_media "a glass vase" --transparent -o vase.png
+  generate_media -i a.png,b.png "combine these into one scene"
+  generate_media "a cat waving" --video --duration 8 --resolution 720p
+  generate_media -i photo.jpg "make this scene move" --video -o scene.mp4
+  generate_media --video --session clip.json "a cat waves" -o cat.mp4
+  generate_media --video --session clip.json "make the cat orange" -o orange-cat.mp4
+  generate_media --video --session clip.json --task extend "continue it" -o longer.mp4
+  generate_media --video --first-frame start.png --last-frame end.png "pan across the scene"
 
 Reuse a session path for later turns; use a new output path to keep each result.
 Image and video sessions use separate JSON files. Specify output settings each
@@ -564,6 +575,10 @@ func resolveAPIKey() string {
 }
 
 func main() {
+	if len(os.Args) == 1 {
+		fmt.Print(shortHelp)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "batch" {
 		key := resolveAPIKey()
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
