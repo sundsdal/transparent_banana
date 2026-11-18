@@ -21,14 +21,16 @@ const defaultModel = "gemini-nano-banana-2.1"
 const defaultVideoModel = "gemini-omni-1.2-flash"
 const legacyVideoModel = "gemini-omni-1.1-flash"
 
-const shortHelp = `generate_media — Generate images and videos via Gemini.
+const shortHelp = `generate_media — Generate images, videos, and speech via Gemini.
 
 Usage: generate_media [options] <prompt>
+       generate_media tts [options] <text>
        generate_media batch <submit|status|download|cancel> ...
 
 Examples:
   generate_media "a cat with a hat"
   generate_media "a cat waving" --video --duration 15
+  generate_media tts "Have a wonderful day!" -v Puck -s cheerful
 Run 'generate_media --help' for full options and examples.
 `
 
@@ -41,9 +43,10 @@ var models = map[string]string{
 	"omni-1.1":   legacyVideoModel,
 }
 
-const help = `generate_media — Generate images and videos via Gemini.
+const help = `generate_media — Generate images, videos, and speech via Gemini.
 
 Usage: generate_media [options] <prompt> [options]
+       generate_media tts [options] <text>   (see generate_media tts --help)
        generate_media batch <submit|status|download|cancel> ... (see generate_media batch --help)
        generate_media --get-interaction-id <id> [-o <path>]
        generate_media --cancel-interaction-id <id>
@@ -605,6 +608,20 @@ func main() {
 		client := &geminiClient{apiKey: key, httpClient: &http.Client{Timeout: 5 * time.Minute}}
 		if err := client.runBatch(ctx, os.Args[2:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if os.Args[1] == "tts" {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		client := &geminiClient{apiKey: resolveAPIKey(), httpClient: &http.Client{Timeout: 10 * time.Minute}}
+		if err := runTTSCommand(ctx, os.Args[2:], client, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			var usage usageError
+			if errors.As(err, &usage) {
+				os.Exit(2)
+			}
 			os.Exit(1)
 		}
 		return
