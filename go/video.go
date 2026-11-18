@@ -65,12 +65,12 @@ type omniError struct {
 }
 
 type omniResponse struct {
-	ID          string     `json:"id"`
-	Status      string     `json:"status"`
-	Error       omniError  `json:"error"`
+	ID          string      `json:"id"`
+	Status      string      `json:"status"`
+	Error       omniError   `json:"error"`
 	Errors      []omniError `json:"errors"`
-	Steps       []omniStep `json:"steps"`
-	OutputVideo omniInput  `json:"output_video"`
+	Steps       []omniStep  `json:"steps"`
+	OutputVideo omniInput   `json:"output_video"`
 }
 
 var omniFileID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -141,31 +141,24 @@ func (c *geminiClient) generateVideoAdvanced(ctx context.Context, request videoG
 	if strings.TrimSpace(request.Prompt) == "" && request.Task != "upscale" {
 		return videoGenerationResult{}, errors.New("a prompt is required for video")
 	}
-	var input any = request.Prompt
-	if len(request.Inputs) > 0 {
-		parts := make([]omniInput, 0, len(request.Inputs)+1)
-		for _, part := range request.Inputs {
-			if part.Type != "image" && part.Type != "video" || (part.Data == "") == (part.URI == "") {
-				return videoGenerationResult{}, errors.New("video input must contain images or videos with exactly one data source")
-			}
-			parts = append(parts, part)
+	parts := make([]omniInput, 0, len(request.Inputs)+1)
+	for _, part := range request.Inputs {
+		if (part.Type != "image" && part.Type != "video") || (part.Data == "") == (part.URI == "") {
+			return videoGenerationResult{}, errors.New("video input must contain images or videos with exactly one data source")
 		}
-		if request.Prompt != "" {
-			parts = append(parts, omniInput{Type: "text", Text: request.Prompt})
-		}
-		input = parts
+		parts = append(parts, part)
 	}
-	if c.vertexProject != "" {
-		parts, ok := input.([]omniInput)
-		if !ok {
-			prompt := request.Prompt
-			if request.Task == "upscale" && request.PreviousInteractionID != "" {
-				prompt = "Upsample video."
-			}
-			parts = []omniInput{{Type: "text", Text: prompt}}
+	prompt := request.Prompt
+	if request.Task == "upscale" && request.PreviousInteractionID != "" {
+		prompt = "Upsample video."
+	}
+	var input any = prompt
+	if len(parts) > 0 || c.vertexProject != "" {
+		if prompt != "" {
+			parts = append(parts, omniInput{Type: "text", Text: prompt})
 		}
 		input = parts
-		if request.Store && !request.Background {
+		if c.vertexProject != "" && request.Store && !request.Background {
 			input = []omniStep{{Type: "user_input", Content: parts}}
 		}
 	}
@@ -221,7 +214,7 @@ func (c *geminiClient) generateVideoAdvanced(ctx context.Context, request videoG
 		if interaction.ID == "" {
 			return videoGenerationResult{}, errors.New("Gemini returned no background interaction ID")
 		}
-		return videoGenerationResult{InteractionID: interaction.ID, RawResponse: raw}, nil
+		return videoGenerationResult{InteractionID: interaction.ID, Status: interaction.Status, RawResponse: raw}, nil
 	}
 	return c.videoResult(ctx, interaction, raw)
 }

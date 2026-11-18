@@ -28,7 +28,7 @@ Usage: generate_media [options] <prompt>
 
 Examples:
   generate_media "a cat with a hat"
-  generate_media "a cat waving" --video --duration 8
+  generate_media "a cat waving" --video --duration 15
 Run 'generate_media --help' for full options and examples.
 `
 
@@ -45,6 +45,8 @@ const help = `generate_media — Generate images and videos via Gemini.
 
 Usage: generate_media [options] <prompt> [options]
        generate_media batch <submit|status|download|cancel> ... (see generate_media batch --help)
+       generate_media --get-interaction-id <id> [-o <path>]
+       generate_media --cancel-interaction-id <id>
 
 Options:
   -i, --input <paths>       Images or videos; image mode also supports PDF
@@ -71,16 +73,17 @@ Options:
       --previous-interaction-id <id>
                            Continue a stored Omni interaction
       --delivery <mode>     Video delivery: inline or uri (see --gcs-output)
-      --stream              Show Omni progress while generating video
-      --background          Submit a video interaction and print its ID
+      --stream             Show Omni progress during generation or retrieval
+      --background         Submit a video interaction and print its ID
       --get-interaction-id <id>
                            Wait for a stored interaction and save its video
       --cancel-interaction-id <id>
                            Cancel an in-progress background interaction
-      --vertex-project <id> Use Google Cloud for Omni video
+      --vertex-project <id>
+                           Use Google Cloud for Omni video
       --vertex-traffic <mode>
                            Google Cloud traffic: shared or dedicated
-      --gcs-output <uri>    Cloud Storage output prefix (gs://bucket/path/)
+      --gcs-output <uri>   Cloud Storage output prefix (gs://bucket/path/)
       --seed <integer>     Reproducible generation on Google Cloud
       --label <key=value>  Google Cloud request label (repeatable)
       --transparent        Produce a transparent PNG using difference matting
@@ -127,7 +130,7 @@ type options struct {
 	imageSize, thinking, search, session, responseJSON         string
 	task, firstFrame, lastFrame, previousInteractionID         string
 	vertexProject, gcsOutput, delivery, getInteractionID       string
-	vertexTraffic, cancelInteractionID                        string
+	vertexTraffic, cancelInteractionID                         string
 	seed                                                       *int32
 	labels                                                     map[string]string
 	transparent, intermediates, timings, help, video, text     bool
@@ -615,10 +618,13 @@ func main() {
 		fmt.Print(help)
 		return
 	}
-	key := resolveAPIKey()
-	if key == "" && o.vertexProject == "" {
-		fmt.Fprintln(os.Stderr, "Error: GEMINI_API_KEY environment variable is required")
-		os.Exit(1)
+	var key string
+	if o.vertexProject == "" {
+		key = resolveAPIKey()
+		if key == "" {
+			fmt.Fprintln(os.Stderr, "Error: GEMINI_API_KEY environment variable is required")
+			os.Exit(1)
+		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

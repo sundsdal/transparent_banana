@@ -140,12 +140,19 @@ func videoRolePrompt(prompt, task, previousID string, parts []omniInput, frameCo
 	return strings.Join(declarations, " ") + " " + prompt
 }
 
-func omni12Prompt(prompt, task, previousID string, frameCount, imageCount int) string {
+func omni12Prompt(prompt, task, previousID string, frameCount, imageCount, videoCount int) string {
+	var directions string
 	switch frameCount {
 	case 1:
-		return "Use the first image as the starting frame. " + prompt
+		directions = "Use the first image as the starting frame. "
 	case 2:
-		return "Use the first image as the starting frame and the second image as the ending frame. " + prompt
+		directions = "Use the first image as the starting frame and the second image as the ending frame. "
+	}
+	if frameCount > 0 {
+		if imageCount > frameCount || videoCount > 0 {
+			directions += "Use the remaining media as references. "
+		}
+		return directions + prompt
 	}
 	if imageCount > 0 && (task == "edit" || task == "extend" || task == "reference_to_video" || previousID != "") {
 		return "Use the images as references. " + prompt
@@ -233,7 +240,7 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 	}
 	prompt := o.prompt
 	if o.model == defaultVideoModel {
-		prompt = omni12Prompt(prompt, o.task, previousID, frameCount, imageCount)
+		prompt = omni12Prompt(prompt, o.task, previousID, frameCount, imageCount, videoCount)
 	} else {
 		prompt = videoRolePrompt(prompt, o.task, previousID, parts, frameCount)
 	}
@@ -244,7 +251,7 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 		Store:    o.session != "" || previousID != "" || o.stream || o.background,
 		Delivery: o.delivery, GCSOutput: o.gcsOutput, GetInteractionID: o.getInteractionID,
 		CancelInteractionID: o.cancelInteractionID,
-		Seed: o.seed, Labels: o.labels, Background: o.background, CaptureResponse: o.responseJSON != "",
+		Seed:                o.seed, Labels: o.labels, Background: o.background, CaptureResponse: o.responseJSON != "",
 	}
 	if o.vertexProject != "" && frameCount > 0 && request.Task == "" && frameCount == len(parts) {
 		request.Task = "image_to_video"

@@ -44,14 +44,6 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 		if mimeType == "application/pdf" {
 			return nil, fmt.Errorf("Omni input %q must be an image or video", path)
 		}
-		if c.vertexProject != "" {
-			switch mimeType {
-			case "video/mov":
-				mimeType = "video/quicktime"
-			case "video/wmv":
-				mimeType = "video/x-ms-wmv"
-			}
-		}
 		if strings.HasPrefix(path, "gs://") {
 			if c.vertexProject == "" {
 				return nil, fmt.Errorf("Cloud Storage input %q requires --vertex-project", path)
@@ -66,8 +58,7 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 		if !info.Mode().IsRegular() || info.Size() == 0 {
 			return nil, fmt.Errorf("Omni input %q must be a nonempty regular file", path)
 		}
-		headerMIME, _, _ := mediaMIME(path)
-		if err := validateMediaHeader(path, headerMIME); err != nil {
+		if err := validateMediaHeader(path, mimeType); err != nil {
 			return nil, err
 		}
 		media = append(media, omniLocalMedia{path: path, mimeType: mimeType, isVideo: isVideo, size: info.Size()})
@@ -82,6 +73,14 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 		kind := "image"
 		if item.isVideo {
 			kind = "video"
+		}
+		if c.vertexProject != "" {
+			switch item.mimeType {
+			case "video/mov":
+				item.mimeType = "video/quicktime"
+			case "video/wmv":
+				item.mimeType = "video/x-ms-wmv"
+			}
 		}
 		if item.uri != "" {
 			parts = append(parts, omniInput{Type: kind, URI: item.uri, MIMEType: item.mimeType})
