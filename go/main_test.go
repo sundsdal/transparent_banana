@@ -63,18 +63,24 @@ func TestParseVideoArgs(t *testing.T) {
 	for _, args := range [][]string{
 		{"--video", "a cat"},
 		{"a cat", "-m", "omni"},
-		{"a cat", "--model=gemini-omni-1.1-flash"},
+		{"a cat", "--model=gemini-omni-1.2-flash"},
 	} {
 		o, err := parseArgs(args)
 		if err != nil || !o.video || o.model != defaultVideoModel || o.output != "output.mp4" {
 			t.Fatalf("parse %v: %+v, %v", args, o, err)
 		}
 	}
+	for _, model := range []string{"omni-1.1", legacyVideoModel} {
+		o, err := parseArgs([]string{"cat", "-m", model})
+		if err != nil || !o.video || o.model != legacyVideoModel {
+			t.Fatalf("legacy model %q: %+v, %v", model, o, err)
+		}
+	}
 	o, err := parseArgs([]string{"a cat", "--video", "-m", "omni", "-o", "CAT.MP4", "-a", "9:16", "--resolution=4k", "--duration=8"})
 	if err != nil || o.output != "CAT.MP4" || o.aspect != "9:16" || o.resolution != "4k" || o.duration != "8s" {
 		t.Fatalf("explicit video args: %+v, %v", o, err)
 	}
-	for _, input := range []string{"3", "10", "8s", "03s"} {
+	for _, input := range []string{"3", "10", "11", "15", "8s", "03s"} {
 		o, err := parseArgs([]string{"cat", "--video", "--duration", input})
 		if err != nil || o.duration == "" || !strings.HasSuffix(o.duration, "s") {
 			t.Fatalf("duration %q: %+v, %v", input, o, err)
@@ -96,7 +102,10 @@ func TestParseVideoArgs(t *testing.T) {
 		{"cat", "--duration", "8"},
 		{"cat", "--video", "--duration", "0"},
 		{"cat", "--video", "--duration", "2"},
-		{"cat", "--video", "--duration", "11"},
+		{"cat", "--video", "--duration", "16"},
+		{"cat", "-m", "omni-1.1", "--duration", "11"},
+		{"cat", "--video", "--task", "extend", "--duration", "11"},
+		{"cat", "--video", "--first-frame", "a.png", "--last-frame", "b.png", "--duration", "11"},
 		{"cat", "--video", "--duration", "8.5"},
 		{"cat", "--video", "--duration", "-8"},
 		{"cat", "--video", "--duration", "+8"},

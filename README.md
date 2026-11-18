@@ -52,7 +52,7 @@ NANOBANANA_BUNDLE_KEY="your-key" ./build.sh
 ./dist/generate_media -i photo.jpg "remove the background"        # edit an image
 ./dist/generate_media -i photo.jpg "the vase" --transparent       # extract with transparency
 ./dist/generate_media -i a.png,b.png "combine into one scene"     # multiple input images
-./dist/generate_media "a cat waving" --video --duration 8          # 8-second video → output.mp4
+./dist/generate_media "a cat waving" --video --duration 15         # 15-second video → output.mp4
 ./dist/generate_media -i photo.jpg "make this scene move" --video -a 16:9 --resolution 720p -o scene.mp4
 ./dist/generate_media --video --first-frame start.png --last-frame end.png "pan from sunrise to dusk" -o transition.mp4
 ./dist/generate_media --video -i source.mp4 "make the lighting warmer" --task edit -o warm.mp4
@@ -64,13 +64,30 @@ NANOBANANA_BUNDLE_KEY="your-key" ./build.sh
 ./dist/generate_media "continue the composition" --session scene.json -i sketch.png
 ```
 
-Video uses [Gemini Omni](https://ai.google.dev/gemini-api/docs/omni). Its default aspect ratio is `16:9` and default resolution is `720p`; use `--aspect 9:16` for portrait video. Set `--duration` to a whole number from 3 to 10 seconds (for example, `8` or `8s`), or omit it to use the API default. By default Omni infers whether to generate, edit, or extend from the prompt and inputs. Use `--task` only when you need to select that mode explicitly; the task can constrain the model. Image, video, and reference inputs are accepted through `-i`; PDFs and audio files are not accepted in video mode. `--transparent` and `--save-intermediates` apply only to images.
+Video uses Gemini Omni 1.2 Flash by default, with synchronized speech, music, and sound effects described in the prompt. The default aspect ratio is `16:9` and the default resolution is `720p`. Use `--aspect 9:16` for portrait video. Set `--duration` to a whole number from 3 to 15 seconds for generation or editing. First-and-last-frame interpolation, extension, and Omni 1.1 support 3 to 10 seconds per turn. Omni infers the task from the prompt and inputs when you omit `--task`. Video mode accepts image and video inputs through `-i`. [Gemini Omni guide](https://ai.google.dev/gemini-api/docs/omni)
 
-`--first-frame` and `--last-frame` bind images to the starting and ending frame; the ending frame requires a starting frame. They are sent before any `-i` references. A prompt with only `-i` retains Omni's usual role inference. With frame flags or an explicit reference/edit/extend task, the CLI adds Omni source and reference declarations such as `[# Sources <FIRST_FRAME>@Image1]` and `[# References <IMAGE_REF_0>@Image2]`. Image and video numbers count separately. For an uploaded video with `--task edit` or `--task extend`, the first video is the source; when resuming a stored interaction, that previous video remains the source and uploaded clips are references.
+`--first-frame` and `--last-frame` send the starting and ending images before any `-i` references. The ending frame requires a starting frame. The CLI describes frame roles in the prompt for Omni 1.2 and uses structured role declarations for Omni 1.1. In Omni 1.2, edit and extension use one input video or a previous interaction as the source, with optional reference images.
 
-Video `--session` creates or resumes a separate JSON session containing the model and last stored interaction ID. Each successful turn writes a new MP4 and then advances the session; keep the same session path and use a different `-o` path to retain older outputs. You can also resume a stored interaction with `--previous-interaction-id`; when used with a session, its ID must match the session's current ID (or the session must be new). The CLI prints the new interaction ID. Session turns and direct ID continuations set `store=true`; one-off video requests use `store=false`, so they cannot be resumed later by ID. Session files do not preserve `--aspect`, `--resolution`, `--duration`, or `--task`: set them on each turn when needed. Server-side interaction history can expire, so a local session file cannot guarantee indefinite continuation. Use `--response-json` to save the raw video API response beside the MP4.
+Video `--session` creates or resumes a separate JSON session containing the model and last stored interaction ID. Existing sessions keep their original model when you omit `--model`. Keep the same session path and use a different `-o` path to retain older outputs. Use `--previous-interaction-id` to continue a stored interaction directly. When you also pass a session file, the ID must match the last stored interaction unless the session is new. Sessions, direct continuations, streams, and background jobs store interactions server-side. Interaction history can expire. Specify `--aspect`, `--resolution`, `--duration`, and `--task` on each turn as needed. Use `--response-json` to save the raw video API response.
 
-Gemini limits uploaded source videos for editing or extension to 10 seconds; generated videos continued with a session or previous interaction ID are exempt from that upload limit. Extension appends to the end of a clip and supports up to 40 seconds total. Video references support up to three clips of three seconds each, and their audio is ignored. Gemini currently disallows editing or extending uploaded videos in the EEA, Switzerland, and the UK; editing or extending videos generated by Gemini is supported there. The CLI leaves video duration and regional eligibility checks to Gemini. See the [Omni limitations](https://ai.google.dev/gemini-api/docs/omni#limitations) for current restrictions.
+Use `--stream` to see progress during generation or retrieval. When combined with `--response-json`, the CLI saves the server's events as a JSON array. Use `--background` to submit a job and print its interaction ID. Retrieve the result with `generate_media --get-interaction-id ID -o clip.mp4`, or cancel a running job with `generate_media --cancel-interaction-id ID`. Gemini API requests use URI delivery by default. Use `--delivery inline` to receive the video in the response.
+
+On the Gemini API, a new video can use up to six image references and three video references. Clips longer than 10 seconds can use one video reference. Each video reference can be up to three seconds long. Extension can produce up to 30 seconds total. Google applies regional restrictions to editing or extending uploaded videos. [Gemini Omni limitations](https://ai.google.dev/gemini-api/docs/omni#limitations)
+
+### Gemini Omni on Google Cloud
+
+Use `--vertex-project PROJECT` with a project that has the Vertex AI API enabled. Authenticate with `gcloud auth login` or supply `GOOGLE_CLOUD_ACCESS_TOKEN`. Pass the same project when resuming a session or retrieving a job. Cloud input media can be local files within the inline request budget or `gs://` object URIs. Cloud responses default to inline delivery. Set `--gcs-output gs://bucket/prefix/` for URI delivery and the CLI will download the resulting MP4 from Cloud Storage. [Google Cloud video guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/overview)
+
+```bash
+./dist/generate_media --vertex-project my-project --seed 42 --label team=media \
+  --duration 15 --resolution 720p --session clip.json "A paper boat drifting down a stream"
+./dist/generate_media --vertex-project my-project --task upscale --session clip.json \
+  --resolution 4k --gcs-output gs://my-bucket/renders/ -o boat-4k.mp4
+./dist/generate_media --vertex-project my-project --task upscale \
+  -i gs://my-bucket/draft.mp4 --resolution 1080p -o draft-1080p.mp4
+```
+
+Standalone upscaling uses a 360p or 720p input up to 15 seconds long. Choose 720p or 1080p from a 360p source, or 1080p or 4K from a 720p source. Cloud editing and extension accept up to two reference images. Use `--vertex-traffic shared` for pay-as-you-go or `--vertex-traffic dedicated` with Provisioned Throughput. [Upscaling guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/upscale-videos) [Provisioned Throughput](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/provisioned-throughput/use-provisioned-throughput)
 
 ## Options
 
@@ -86,14 +103,24 @@ Gemini limits uploaded source videos for editing or extension to 10 seconds; gen
 | `--thinking <level>` | Nano Banana 2.1 thinking: `minimal`, `medium`, or `high` |
 | `--include-thoughts` | Save returned thinking text and images separately |
 | `--search <mode>` | Ground 2.1 images with `web`, `image`, `both`, or `none` |
-| `--text` | Request text and images; accept text-only answers |
+| `--text` | Request text and images in image mode |
 | `--session <path>` | Save or resume an image or video JSON conversation; each mode has its own format |
 | `--response-json <path>` | Save the raw image or video API response |
-| `--duration <seconds>` | Video length: 3–10 whole seconds (`8` or `8s`) |
-| `--task <mode>` | Explicit video mode: `text_to_video`, `image_to_video`, `reference_to_video`, `edit`, or `extend` |
+| `--duration <seconds>` | Video length in whole seconds (`8` or `8s`), up to 15 for supported Omni 1.2 tasks |
+| `--task <mode>` | Explicit video mode: `text_to_video`, `image_to_video`, `reference_to_video`, `edit`, `extend`, or `upscale` (Google Cloud) |
 | `--first-frame <path>` | Starting image for video interpolation |
 | `--last-frame <path>` | Ending image for video interpolation; requires `--first-frame` |
 | `--previous-interaction-id <id>` | Continue a stored Omni interaction without a session file |
+| `--delivery <mode>` | Receive video as `inline` data or a `uri` |
+| `--stream` | Show progress during video generation or retrieval |
+| `--background` | Submit video generation and print the interaction ID |
+| `--get-interaction-id <id>` | Wait for an interaction and save its video |
+| `--cancel-interaction-id <id>` | Cancel an in-progress video interaction |
+| `--vertex-project <id>` | Use Google Cloud for video generation |
+| `--vertex-traffic <mode>` | Google Cloud traffic mode, `shared` or `dedicated` |
+| `--gcs-output <uri>` | Cloud Storage output prefix for URI delivery |
+| `--seed <integer>` | Set the generation seed on Google Cloud |
+| `--label <key=value>` | Add a Google Cloud request label (repeatable) |
 | `--transparent` | Produce a transparent PNG via difference matting (two API calls) |
 | `--save-intermediates` | Save white/black intermediate images |
 | `--timings` | Report API, local processing, and total time (Go CLI) |
@@ -106,7 +133,8 @@ Gemini limits uploaded source videos for editing or extension to 10 seconds; gen
 | `flash-lite` | `gemini-3.1-flash-lite-image` | Recommended for speed |
 | `pro` | `gemini-3-pro-image` | Nano Banana Pro, highest quality |
 | `flash-2` | `gemini-2.5-flash-image` | Legacy |
-| `omni` | `gemini-omni-1.1-flash` | Video; also selected by `--video` |
+| `omni` | `gemini-omni-1.2-flash` | Default for `--video` |
+| `omni-1.1` | `gemini-omni-1.1-flash` | Previous video model |
 
 Use Lite with `./dist/generate_media "a cat with a hat" -m flash-lite` when speed matters.
 

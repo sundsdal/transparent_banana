@@ -191,7 +191,7 @@ func TestVideoSessionRejectsWrongKindAndMismatchBeforeRequest(t *testing.T) {
 func TestVideoSessionExtendWithUploadedReferences(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "turns.json")
-	if err := saveVideoSession(sessionPath, videoSession{Kind: "video", Version: 1, Model: defaultVideoModel, LastInteractionID: "generated-1"}); err != nil {
+	if err := saveVideoSession(sessionPath, videoSession{Kind: "video", Version: 1, Model: legacyVideoModel, LastInteractionID: "generated-1"}); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeAdvancedVideo{
@@ -203,7 +203,8 @@ func TestVideoSessionExtendWithUploadedReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := client.requests[0]
-	if request.PreviousInteractionID != "generated-1" || request.Prompt != "[# References <VIDEO_REF_0>@Video1 <IMAGE_REF_0>@Image1] continue with the character" {
+	if request.Model != legacyVideoModel || request.PreviousInteractionID != "generated-1" ||
+		request.Prompt != "[# References <VIDEO_REF_0>@Video1 <IMAGE_REF_0>@Image1] continue with the character" {
 		t.Fatalf("uploaded refs should not replace previous source: %+v", request)
 	}
 }

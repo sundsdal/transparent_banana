@@ -22,9 +22,12 @@ type imageData struct {
 }
 
 type geminiClient struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	apiKey        string
+	baseURL       string
+	httpClient    *http.Client
+	vertexProject string
+	vertexToken   string
+	vertexTraffic string
 }
 
 type geminiRequest struct {
@@ -204,10 +207,12 @@ func (c *geminiClient) generate(ctx context.Context, model, prompt string, image
 const maxGeminiDiagnosticLength = 800
 
 func (c *geminiClient) redact(value string) string {
-	if c.apiKey == "" {
-		return value
+	for _, secret := range []string{c.apiKey, c.vertexToken} {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
 	}
-	return strings.ReplaceAll(value, c.apiKey, "[REDACTED]")
+	return value
 }
 
 func (c *geminiClient) responseDiagnostics(response geminiResponse) string {

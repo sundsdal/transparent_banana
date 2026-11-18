@@ -30,7 +30,8 @@ type omniVideoConfig struct {
 }
 
 type omniGenerationConfig struct {
-	VideoConfig omniVideoConfig `json:"video_config"`
+	VideoConfig *omniVideoConfig `json:"video_config,omitempty"`
+	Seed        *int32           `json:"seed,omitempty"`
 }
 
 type omniVideoFormat struct {
@@ -39,6 +40,7 @@ type omniVideoFormat struct {
 	Resolution  string `json:"resolution,omitempty"`
 	Duration    string `json:"duration,omitempty"`
 	Delivery    string `json:"delivery"`
+	GCSURI      string `json:"gcs_uri,omitempty"`
 }
 
 type omniRequest struct {
@@ -50,24 +52,25 @@ type omniRequest struct {
 	Background            bool                  `json:"background"`
 	Stream                bool                  `json:"stream"`
 	Store                 bool                  `json:"store"`
+	Labels                map[string]string     `json:"labels,omitempty"`
+}
+
+type omniStep struct {
+	Type    string      `json:"type"`
+	Content []omniInput `json:"content"`
+}
+
+type omniError struct {
+	Message string `json:"message"`
 }
 
 type omniResponse struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  struct {
-		Message string `json:"message"`
-	} `json:"error"`
-	Steps []struct {
-		Type    string `json:"type"`
-		Content []struct {
-			Type     string `json:"type"`
-			MIMEType string `json:"mime_type"`
-			Data     string `json:"data"`
-			URI      string `json:"uri"`
-			Text     string `json:"text"`
-		} `json:"content"`
-	} `json:"steps"`
+	ID          string      `json:"id"`
+	Status      string      `json:"status"`
+	Error       omniError   `json:"error"`
+	Errors      []omniError `json:"errors"`
+	Steps       []omniStep  `json:"steps"`
+	OutputVideo omniInput   `json:"output_video"`
 }
 
 var omniFileID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -75,7 +78,12 @@ var omniFileID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 type videoGenerationRequest struct {
 	Model, Prompt, Aspect, Resolution, Duration, Task string
 	PreviousInteractionID                             string
-	Store                                             bool
+	Delivery, GCSOutput, GetInteractionID             string
+	CancelInteractionID                               string
+	Seed                                              *int32
+	Labels                                            map[string]string
+	Store, Background, CaptureResponse                bool
+	StreamProgress                                    func(string)
 	Inputs                                            []omniInput
 }
 
@@ -84,6 +92,8 @@ type videoGenerationResult struct {
 	VideoStream   io.ReadCloser // The caller owns and must close URI download streams.
 	InteractionID string
 	RawResponse   []byte
+	Text          []string
+	Status        string
 }
 
 // generateVideo preserves the legacy []byte interface; the advanced CLI streams URI downloads to disk.
@@ -116,36 +126,69 @@ func (c *geminiClient) generateVideo(ctx context.Context, model, prompt string, 
 }
 
 func (c *geminiClient) generateVideoAdvanced(ctx context.Context, request videoGenerationRequest) (videoGenerationResult, error) {
-	if strings.TrimSpace(c.apiKey) == "" {
+	if c.vertexProject == "" && strings.TrimSpace(c.apiKey) == "" {
 		return videoGenerationResult{}, errors.New("Gemini API key is required")
+	}
+	if request.GetInteractionID != "" {
+		return c.getVideoInteraction(ctx, request)
+	}
+	if request.CancelInteractionID != "" {
+		return c.cancelVideoInteraction(ctx, request.CancelInteractionID)
 	}
 	if !strings.HasPrefix(request.Model, "gemini-omni-") {
 		return videoGenerationResult{}, errors.New("an Omni model is required for video")
 	}
-	if strings.TrimSpace(request.Prompt) == "" {
+	if strings.TrimSpace(request.Prompt) == "" && request.Task != "upscale" {
 		return videoGenerationResult{}, errors.New("a prompt is required for video")
 	}
-	var input any = request.Prompt
-	if len(request.Inputs) > 0 {
-		parts := make([]omniInput, 0, len(request.Inputs)+1)
-		for _, part := range request.Inputs {
-			if part.Type != "image" && part.Type != "video" || (part.Data == "") == (part.URI == "") {
-				return videoGenerationResult{}, errors.New("video input must contain images or videos with exactly one data source")
-			}
-			parts = append(parts, part)
+	parts := make([]omniInput, 0, len(request.Inputs)+1)
+	for _, part := range request.Inputs {
+		if (part.Type != "image" && part.Type != "video") || (part.Data == "") == (part.URI == "") {
+			return videoGenerationResult{}, errors.New("video input must contain images or videos with exactly one data source")
 		}
-		parts = append(parts, omniInput{Type: "text", Text: request.Prompt})
+		parts = append(parts, part)
+	}
+	prompt := request.Prompt
+	if request.Task == "upscale" && request.PreviousInteractionID != "" {
+		prompt = "Upsample video."
+	}
+	var input any = prompt
+	if len(parts) > 0 || c.vertexProject != "" {
+		if prompt != "" {
+			parts = append(parts, omniInput{Type: "text", Text: prompt})
+		}
 		input = parts
+		if c.vertexProject != "" && request.Store && !request.Background {
+			input = []omniStep{{Type: "user_input", Content: parts}}
+		}
+	}
+	delivery := request.Delivery
+	if delivery == "" {
+		delivery = "uri"
+		if c.vertexProject != "" && request.GCSOutput == "" {
+			delivery = "inline"
+		}
 	}
 	omniReq := omniRequest{
 		Model: request.Model, Input: input,
-		ResponseFormat:        omniVideoFormat{Type: "video", AspectRatio: request.Aspect, Resolution: request.Resolution, Duration: request.Duration, Delivery: "uri"},
+		ResponseFormat:        omniVideoFormat{Type: "video", AspectRatio: request.Aspect, Resolution: request.Resolution, Duration: request.Duration, Delivery: delivery, GCSURI: request.GCSOutput},
 		PreviousInteractionID: request.PreviousInteractionID, Store: request.Store,
+		Background: request.Background, Stream: request.StreamProgress != nil, Labels: request.Labels,
 	}
-	if request.Task != "" {
-		omniReq.GenerationConfig = &omniGenerationConfig{VideoConfig: omniVideoConfig{Task: request.Task}}
+	if request.Task != "" || request.Seed != nil {
+		omniReq.GenerationConfig = &omniGenerationConfig{Seed: request.Seed}
+		if request.Task != "" {
+			omniReq.GenerationConfig.VideoConfig = &omniVideoConfig{Task: request.Task}
+		}
 	}
-	payload, err := json.Marshal(omniReq)
+	var body any = omniReq
+	if c.vertexProject != "" {
+		body = struct {
+			omniRequest
+			ResponseFormat []omniVideoFormat `json:"response_format"`
+		}{omniReq, []omniVideoFormat{omniReq.ResponseFormat}}
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return videoGenerationResult{}, fmt.Errorf("encode Gemini video request: %w", err)
 	}
@@ -157,74 +200,126 @@ func (c *geminiClient) generateVideoAdvanced(ctx context.Context, request videoG
 	if err := c.videoStatusError(response); err != nil {
 		return videoGenerationResult{}, err
 	}
-	raw, err := io.ReadAll(response.Body)
+	var interaction omniResponse
+	var raw []byte
+	if omniReq.Stream {
+		interaction, raw, err = c.readVideoEvents(response.Body, request.StreamProgress, request.CaptureResponse)
+	} else {
+		interaction, raw, err = readVideoInteraction(response.Body)
+	}
 	if err != nil {
-		return videoGenerationResult{}, fmt.Errorf("read Gemini video response: %w", err)
+		return videoGenerationResult{}, err
 	}
+	if request.Background && (interactionPending(interaction.Status) || interaction.Status == "completed") {
+		if interaction.ID == "" {
+			return videoGenerationResult{}, errors.New("Gemini returned no background interaction ID")
+		}
+		return videoGenerationResult{InteractionID: interaction.ID, Status: interaction.Status, RawResponse: raw}, nil
+	}
+	return c.videoResult(ctx, interaction, raw)
+}
+
+func readVideoInteraction(body io.Reader) (omniResponse, []byte, error) {
 	var result omniResponse
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return videoGenerationResult{}, fmt.Errorf("decode Gemini video response: %w", err)
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return result, nil, fmt.Errorf("read Gemini video response: %w", err)
 	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return result, nil, fmt.Errorf("decode Gemini video response: %w", err)
+	}
+	return result, raw, nil
+}
+
+func (c *geminiClient) videoResult(ctx context.Context, result omniResponse, raw []byte) (videoGenerationResult, error) {
 	if result.Status != "completed" {
-		detail := c.boundedDiagnostic(result.Error.Message)
+		detail := result.Error.Message
+		if detail == "" && len(result.Errors) > 0 {
+			detail = result.Errors[0].Message
+		}
+		detail = c.boundedDiagnostic(detail)
 		if detail != "" {
 			return videoGenerationResult{}, fmt.Errorf("Gemini video interaction %s: %s", c.boundedDiagnostic(result.Status), detail)
 		}
 		return videoGenerationResult{}, fmt.Errorf("Gemini video interaction %s", c.boundedDiagnostic(result.Status))
 	}
+	output := videoGenerationResult{InteractionID: result.ID, RawResponse: raw}
+	video := result.OutputVideo
 	for _, step := range result.Steps {
 		if step.Type != "model_output" {
 			continue
 		}
 		for _, part := range step.Content {
-			if part.Type != "video" || strings.ToLower(strings.TrimSpace(strings.Split(part.MIMEType, ";")[0])) != "video/mp4" {
-				continue
+			if part.Type == "video" && isMP4(part.MIMEType) && (part.URI != "" || part.Data != "") &&
+				(!isMP4(video.MIMEType) || (video.URI == "" && video.Data == "")) {
+				video = part
 			}
-			if part.URI != "" {
-				stream, err := c.openVideoFile(ctx, part.URI)
-				if err != nil {
-					return videoGenerationResult{}, err
-				}
-				return videoGenerationResult{VideoStream: stream, InteractionID: result.ID, RawResponse: raw}, nil
-			}
-			if part.Data != "" {
-				data, err := base64.StdEncoding.DecodeString(part.Data)
-				if err != nil {
-					return videoGenerationResult{}, fmt.Errorf("decode Gemini video data: %w", err)
-				}
-				if len(data) > 0 {
-					return videoGenerationResult{Video: data, InteractionID: result.ID, RawResponse: raw}, nil
-				}
-			}
-		}
-	}
-	var details []string
-	for _, step := range result.Steps {
-		if step.Type != "model_output" {
-			continue
-		}
-		for _, part := range step.Content {
 			if part.Type == "text" && strings.TrimSpace(part.Text) != "" {
-				details = append(details, part.Text)
+				output.Text = append(output.Text, c.redact(part.Text))
 			}
 		}
 	}
-	if len(details) > 0 {
-		return videoGenerationResult{}, fmt.Errorf("Gemini response did not contain an MP4 video: %s", c.boundedDiagnostic(strings.Join(details, "; ")))
+	if isMP4(video.MIMEType) {
+		if video.URI != "" {
+			var err error
+			if c.vertexProject != "" {
+				output.VideoStream, err = c.openCloudVideo(ctx, video.URI)
+			} else {
+				output.VideoStream, err = c.openVideoFile(ctx, video.URI)
+			}
+			return output, err
+		}
+		if video.Data != "" {
+			var err error
+			output.Video, err = base64.StdEncoding.DecodeString(video.Data)
+			if err != nil {
+				return videoGenerationResult{}, fmt.Errorf("decode Gemini video data: %w", err)
+			}
+			if len(output.Video) != 0 {
+				return output, nil
+			}
+		}
+	}
+	if len(output.Text) > 0 {
+		return videoGenerationResult{}, fmt.Errorf("Gemini response did not contain an MP4 video: %s", c.boundedDiagnostic(strings.Join(output.Text, "; ")))
 	}
 	return videoGenerationResult{}, errors.New("Gemini response did not contain an MP4 video")
+}
+
+func isMP4(mimeType string) bool {
+	mediaType, _, _ := strings.Cut(mimeType, ";")
+	return strings.EqualFold(strings.TrimSpace(mediaType), "video/mp4")
 }
 
 func (c *geminiClient) videoRequest(ctx context.Context, method, path string, body io.Reader, contentType string, allowDownloadRedirects bool) (*http.Response, error) {
 	baseURL := c.baseURL
 	if baseURL == "" {
-		baseURL = defaultGeminiBaseURL
+		if c.vertexProject == "" {
+			baseURL = defaultGeminiBaseURL
+		} else {
+			baseURL = "https://aiplatform.googleapis.com/v1beta1/projects/" + url.PathEscape(c.vertexProject) + "/locations/global"
+		}
 	}
-	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, body)
+	return c.sendVideoRequest(ctx, method, strings.TrimRight(baseURL, "/")+path, body, contentType, allowDownloadRedirects)
+}
+
+func (c *geminiClient) sendVideoRequest(ctx context.Context, method, endpoint string, body io.Reader, contentType string, allowDownloadRedirects bool) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("create Gemini video request: %w", err)
 	}
-	request.Header.Set("x-goog-api-key", c.apiKey)
+	if c.vertexProject == "" {
+		request.Header.Set("x-goog-api-key", c.apiKey)
+		if strings.Contains(request.URL.Path, "/interactions") {
+			request.Header.Set("Api-Revision", "2026-05-20")
+		}
+	} else {
+		request.Header.Set("Authorization", "Bearer "+c.vertexToken)
+		request.Header.Set("x-goog-user-project", c.vertexProject)
+		if c.vertexTraffic != "" && method == http.MethodPost {
+			request.Header.Set("X-Vertex-AI-LLM-Request-Type", c.vertexTraffic)
+		}
+	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -245,6 +340,8 @@ func (c *geminiClient) videoRequest(ctx context.Context, method, path string, bo
 				return errors.New("video download redirected to a non-HTTPS origin")
 			}
 			next.Header.Del("x-goog-api-key")
+			next.Header.Del("Authorization")
+			next.Header.Del("x-goog-user-project")
 		}
 		return nil
 	}
@@ -283,8 +380,10 @@ func (c *geminiClient) openVideoFile(ctx context.Context, uri string) (io.ReadCl
 		return nil, errors.New("Gemini returned an invalid video file URI")
 	}
 	path := parsed.Path
-	if !strings.HasSuffix(path, ":download") {
-		return nil, errors.New("Gemini returned an invalid video file URI")
+	if strings.HasPrefix(path, "files/") {
+		path = "/v1beta/" + path
+	} else if strings.HasPrefix(path, "/files/") {
+		path = "/v1beta" + path
 	}
 	path = strings.TrimSuffix(path, ":download")
 	const marker = "/files/"
