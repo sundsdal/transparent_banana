@@ -1,6 +1,6 @@
 # generate_media
 
-Generate images and videos via Gemini. The Go CLI is a fast, standalone binary with no runtime dependencies. Images are the default: image mode accepts PNG, JPEG, GIF, WebP, HEIC, HEIF, PDF, and video inputs and writes PNG or JPEG output. Add `--video` to create an MP4 with Gemini Omni from a prompt, images, or uploaded video. Optionally produce a transparent PNG using difference matting.
+Generate images, videos, and speech via Gemini. The Go CLI is a fast, standalone binary with no runtime dependencies. Images are the default: image mode accepts PNG, JPEG, GIF, WebP, HEIC, HEIF, PDF, and video inputs and writes PNG or JPEG output. Add `--video` to create an MP4 with Gemini Omni from a prompt, images, or uploaded video. Optionally produce a transparent PNG using difference matting. Use `generate_media tts` for text to speech with Gemini 3.8 Flash TTS and Flash-Lite TTS.
 
 ## How transparency works
 
@@ -141,6 +141,61 @@ Use Lite with `./dist/generate_media "a cat with a hat" -m flash-lite` when spee
 For example, `./dist/generate_media "a cat with a hat" -m flash-lite --timings` measures where time is spent. Direct image generation uses one API call. Transparency uses two sequential calls because the black-background edit depends on the white-background result. Video generation can take multiple requests while Gemini prepares and serves the MP4.
 
 Image generation saves every returned image: the first at `-o`, then `-2`, `-3`, and so on. If a response contains text or multiple images, an ordered Markdown result is saved beside the output. Search grounding creates a `-grounding.html` attribution file and prints source page URLs. Nano Banana 2.1 accepts up to 14 input images. Video inputs can be MP4, M4V, MPEG, MPG, MOV, AVI, FLV, WebM, WMV, or 3GP. In image mode, `--session` stores the model's original response content so later turns can reuse its thought signatures; it cannot be combined with `--transparent`. Uploaded Files API inputs expire after 48 hours; start a new image session if its earlier video, PDF, or large-image file references have expired.
+
+## Text to speech
+
+`generate_media tts` uses [Gemini 3.8 TTS](https://ai.google.dev/gemini-api/docs/speech-generation) through the Interactions API with the same `GEMINI_API_KEY`.
+
+```bash
+./dist/generate_media tts "Have a wonderful day!" -v Puck -s "cheerful and friendly"      # → output.wav
+./dist/generate_media tts "Wait... <short pause> did you hear that? <gasp>" -s "whispered, nervous"
+./dist/generate_media tts -f chapter.txt -m flash-lite -o chapter.wav --stream --play
+./dist/generate_media tts --speaker Joe=Puck --speaker Jane=Kore -o chat.wav \
+  $'Joe: So the launch is Thursday |oh hmm| are we ready?\nJane (calm): We are.'
+./dist/generate_media tts "Hei, hvordan går det?" --language nb-NO --format mulaw -o hei.ulaw
+./dist/generate_media tts "Straight to a player" --stream -o - | ffplay -nodisp -autoexit -
+```
+
+| Alias | Model ID | |
+|---|---|---|
+| `flash` | `gemini-3.8-flash-tts` | Most expressive, 130+ languages (default) |
+| `flash-lite` | `gemini-3.8-flash-lite-tts` | Faster and cheaper, 100+ languages |
+
+The text is read verbatim, so put delivery instructions in `--style` rather than the text. Inside the text, use English inline tags such as `<sigh>`, `<laugh>`, `<gasp>`, `<whispering>`, `<breath>`, `<short pause>`, and `<long pause>`; capitalize a WORD for emphasis. The models detect the language automatically; `--language` is an optional hint.
+
+| Flag | Description |
+|---|---|
+| `-o, --output <path>` | `.wav` (default `output.wav`), raw `.pcm`/`.raw`/`.l16`, `.ulaw`/`.mulaw`, `.alaw`, or `-` for WAV on stdout |
+| `-m, --model <name>` | `flash` (default), `flash-lite`, or a full model ID |
+| `-v, --voice <id>` | Prebuilt voice (default `Kore`), Extended Voice Library ID, or custom `voice_…`/`voicekey_…` |
+| `-s, --style <text>` | Delivery direction, such as `"warm and enthusiastic"` |
+| `-f, --file <path>` | Read the text from a file, or `-` for stdin |
+| `--speaker <NAME=VOICE>` | Repeat for dialogue; lines start with `NAME:` or `NAME (style):` |
+| `--per-turn` | Synthesize dialogue one turn at a time |
+| `--gap <duration>` | Silence between per-turn lines (default `250ms`) |
+| `--language <code>` | BCP-47 language hint |
+| `--format <encoding>` | `pcm` (24 kHz 16-bit, default), `mulaw`, or `alaw` (8 kHz G.711) |
+| `--seed <n>` | Sampling seed for more repeatable takes |
+| `--stream` | Stream audio while it is generated; `--timings` reports time to first audio |
+| `--play` | Play the saved WAV (`afplay`, `ffplay`, `paplay`, or `aplay`) |
+| `--response-json <path>` | Save the raw API response (not with `--stream`) |
+| `--timings` | Report API time and token usage |
+
+Dialogue with exactly two prebuilt voices uses Gemini's native multi-speaker mode in one request, which supports overlapping reactions written in pipes (`|mm-hmm|`). More than two speakers, custom voices, or `--per-turn` synthesize each turn separately (in parallel unless streaming) and join them with `--gap` silence. Output is mono: 24 kHz for PCM and 8 kHz for μ-law and A-law. Gemini fixes these sample rates. A WAV output keeps the encoding chosen with `--format`. Requests are limited to 8,192 input tokens and 16,384 output tokens (about 11 minutes of audio).
+
+### Voices
+
+```bash
+./dist/generate_media tts voices --builtin                     # the 30 prebuilt voices, offline
+./dist/generate_media tts voices --language en-GB --gender female --search "calm narrator"
+./dist/generate_media tts voice design --description "A warm, thoughtful astronomer in his late 60s with a gentle British accent" --name Astronomer
+./dist/generate_media tts voice remix --base Puck --description "slightly older, measured audiobook pacing"
+./dist/generate_media tts voice clone --source me.wav --consent consent.wav --name "My voice"
+./dist/generate_media tts voice get voice_123 -o sample.wav
+./dist/generate_media tts voice delete voice_123
+```
+
+`tts voices` searches the prebuilt voices, the Extended Voice Library of more than 2,000 voices, and your own voices. It accepts `--language`, `--region`, `--gender`, `--pitch`, `--type`, `--accent`, `--persona`, `--context`, `--search`, `--page-size`, `--page-token`, `--all`, and `--json`. Voice design and remix create stored `voice_…` voices and save a sample WAV. Cloning needs 10–30 seconds of clean speech plus a recording of the same adult speaker reading Google's consent statement; only clone voices you have permission to use. `--no-store` returns a temporary `voicekey_…` that expires after 7 days. Custom voices require a paid-tier project, which can store up to 200 voices; stored voices expire one year after last use. All generated speech carries a SynthID watermark.
 
 ## Batch image generation
 
