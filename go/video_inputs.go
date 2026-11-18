@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 )
 
 type omniLocalMedia struct {
@@ -12,6 +13,18 @@ type omniLocalMedia struct {
 	mimeType string
 	isVideo  bool
 	size     int64
+	uri      string
+}
+
+func omniMediaMIME(path string) (string, bool, error) {
+	if strings.HasPrefix(path, "gs://") {
+		_, object, err := splitGCSURI(path)
+		if err != nil {
+			return "", false, err
+		}
+		path = object
+	}
+	return mediaMIME(path)
 }
 
 // prepareOmniInputs preserves the order of local images and videos. Images
@@ -24,12 +37,27 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		mimeType, isVideo, err := mediaMIME(path)
+		mimeType, isVideo, err := omniMediaMIME(path)
 		if err != nil {
 			return nil, fmt.Errorf("unsupported Omni input %q (use PNG, JPEG, GIF, WebP, HEIC, HEIF, or a supported video file)", path)
 		}
 		if mimeType == "application/pdf" {
 			return nil, fmt.Errorf("Omni input %q must be an image or video", path)
+		}
+		if c.vertexProject != "" {
+			switch mimeType {
+			case "video/mov":
+				mimeType = "video/quicktime"
+			case "video/wmv":
+				mimeType = "video/x-ms-wmv"
+			}
+		}
+		if strings.HasPrefix(path, "gs://") {
+			if c.vertexProject == "" {
+				return nil, fmt.Errorf("Cloud Storage input %q requires --vertex-project", path)
+			}
+			media = append(media, omniLocalMedia{path: path, mimeType: mimeType, isVideo: isVideo, uri: path})
+			continue
 		}
 		info, err := os.Stat(path)
 		if err != nil {
@@ -38,7 +66,8 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 		if !info.Mode().IsRegular() || info.Size() == 0 {
 			return nil, fmt.Errorf("Omni input %q must be a nonempty regular file", path)
 		}
-		if err := validateMediaHeader(path, mimeType); err != nil {
+		headerMIME, _, _ := mediaMIME(path)
+		if err := validateMediaHeader(path, headerMIME); err != nil {
 			return nil, err
 		}
 		media = append(media, omniLocalMedia{path: path, mimeType: mimeType, isVideo: isVideo, size: info.Size()})
@@ -54,7 +83,11 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 		if item.isVideo {
 			kind = "video"
 		}
-		if !item.isVideo && item.size <= maxInlineMediaBytes-inlineBytes {
+		if item.uri != "" {
+			parts = append(parts, omniInput{Type: kind, URI: item.uri, MIMEType: item.mimeType})
+			continue
+		}
+		if (!item.isVideo || c.vertexProject != "") && item.size <= maxInlineMediaBytes-inlineBytes {
 			data, err := os.ReadFile(item.path)
 			if err != nil {
 				return nil, fmt.Errorf("read Omni input %q: %w", item.path, err)
@@ -67,6 +100,9 @@ func (c *geminiClient) prepareOmniInputs(ctx context.Context, paths []string) ([
 				inlineBytes += int64(len(data))
 				continue
 			}
+		}
+		if c.vertexProject != "" {
+			return nil, fmt.Errorf("Omni inputs exceed the inline media budget; use a gs:// URI for %q", item.path)
 		}
 		file, err := c.uploadFile(ctx, item.path, item.mimeType)
 		if err != nil {

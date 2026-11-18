@@ -18,7 +18,8 @@ import (
 var bundledAPIKey string
 
 const defaultModel = "gemini-nano-banana-2.1"
-const defaultVideoModel = "gemini-omni-1.1-flash"
+const defaultVideoModel = "gemini-omni-1.2-flash"
+const legacyVideoModel = "gemini-omni-1.1-flash"
 
 const shortHelp = `generate_media — Generate images and videos via Gemini.
 
@@ -37,6 +38,7 @@ var models = map[string]string{
 	"pro":        "gemini-3-pro-image",
 	"flash-2":    "gemini-2.5-flash-image",
 	"omni":       defaultVideoModel,
+	"omni-1.1":   legacyVideoModel,
 }
 
 const help = `generate_media — Generate images and videos via Gemini.
@@ -60,13 +62,27 @@ Options:
       --session <path>     Create or resume a conversation in a JSON file
       --response-json <path>
                            Save the raw API response
-      --duration <seconds> Video length: 3–10 whole seconds (e.g. 8 or 8s)
+      --duration <seconds> Video length in whole seconds (3–15 for Omni 1.2,
+                           3–10 for interpolation, extension, and older models)
       --task <mode>        Video task: text_to_video, image_to_video,
-                           reference_to_video, edit, or extend
+                           reference_to_video, edit, extend, or upscale (Cloud)
       --first-frame <path> Starting image for video interpolation
       --last-frame <path>  Ending image (requires --first-frame)
       --previous-interaction-id <id>
                            Continue a stored Omni interaction
+      --delivery <mode>     Video delivery: inline or uri (see --gcs-output)
+      --stream              Show Omni progress while generating video
+      --background          Submit a video interaction and print its ID
+      --get-interaction-id <id>
+                           Wait for a stored interaction and save its video
+      --cancel-interaction-id <id>
+                           Cancel an in-progress background interaction
+      --vertex-project <id> Use Google Cloud for Omni video
+      --vertex-traffic <mode>
+                           Google Cloud traffic: shared or dedicated
+      --gcs-output <uri>    Cloud Storage output prefix (gs://bucket/path/)
+      --seed <integer>     Reproducible generation on Google Cloud
+      --label <key=value>  Google Cloud request label (repeatable)
       --transparent        Produce a transparent PNG using difference matting
       --save-intermediates Save white/black images beside the output
       --timings            Report API and local processing durations
@@ -77,7 +93,8 @@ Models:
   flash-lite  gemini-3.1-flash-lite-image  Nano Banana 2 Lite (fastest)
   pro         gemini-3-pro-image          Nano Banana Pro
   flash-2     gemini-2.5-flash-image       Legacy
-  omni        gemini-omni-1.1-flash        Video generation
+  omni        gemini-omni-1.2-flash        Default video model
+  omni-1.1    gemini-omni-1.1-flash        Previous video model
 
 Image aspect ratios:
   1:1 1:4 1:8 2:3 3:2 3:4 4:1 4:3 4:5 5:4 8:1 9:16 16:9 21:9
@@ -88,12 +105,13 @@ Examples:
   generate_media -i photo.jpg "remove the background"
   generate_media "a glass vase" --transparent -o vase.png
   generate_media -i a.png,b.png "combine these into one scene"
-  generate_media "a cat waving" --video --duration 8 --resolution 720p
+  generate_media "a cat waving" --video --duration 15 --resolution 720p
   generate_media -i photo.jpg "make this scene move" --video -o scene.mp4
   generate_media --video --session clip.json "a cat waves" -o cat.mp4
   generate_media --video --session clip.json "make the cat orange" -o orange-cat.mp4
   generate_media --video --session clip.json --task extend "continue it" -o longer.mp4
   generate_media --video --first-frame start.png --last-frame end.png "pan across the scene"
+  generate_media --vertex-project my-project --task upscale --resolution 1080p -i gs://my-bucket/draft.mp4
 
 Reuse a session path for later turns; use a new output path to keep each result.
 Image and video sessions use separate JSON files. Specify output settings each
@@ -108,14 +126,18 @@ type options struct {
 	prompt, input, output, model, aspect, resolution, duration string
 	imageSize, thinking, search, session, responseJSON         string
 	task, firstFrame, lastFrame, previousInteractionID         string
+	vertexProject, gcsOutput, delivery, getInteractionID       string
+	vertexTraffic, cancelInteractionID                        string
+	seed                                                       *int32
+	labels                                                     map[string]string
 	transparent, intermediates, timings, help, video, text     bool
-	includeThoughts                                            bool
+	includeThoughts, stream, background, explicitModel         bool
 }
 
 // Parse flags before or after the prompt, matching the existing Python CLI.
 func parseArgs(args []string) (options, error) {
 	o := options{output: "output.png", model: defaultModel}
-	var explicitModel, explicitOutput bool
+	var explicitOutput bool
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -129,7 +151,7 @@ func parseArgs(args []string) (options, error) {
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
-		case "-h", "--help", "--transparent", "--save-intermediates", "--timings", "--video", "--include-thoughts", "--text":
+		case "-h", "--help", "--transparent", "--save-intermediates", "--timings", "--video", "--include-thoughts", "--text", "--stream", "--background":
 			if hasValue {
 				return o, fmt.Errorf("%s does not take a value", name)
 			}
@@ -148,11 +170,16 @@ func parseArgs(args []string) (options, error) {
 				o.includeThoughts = true
 			case "--text":
 				o.text = true
+			case "--stream":
+				o.stream = true
+			case "--background":
+				o.background = true
 			}
-		case "-i", "--input", "-o", "--output", "-m", "--model", "-a", "--aspect", "--resolution", "--duration", "--image-size", "--thinking", "--search", "--session", "--response-json", "--task", "--first-frame", "--last-frame", "--previous-interaction-id":
+		case "-i", "--input", "-o", "--output", "-m", "--model", "-a", "--aspect", "--resolution", "--duration", "--image-size", "--thinking", "--search", "--session", "--response-json", "--task", "--first-frame", "--last-frame", "--previous-interaction-id",
+			"--vertex-project", "--vertex-traffic", "--gcs-output", "--delivery", "--get-interaction-id", "--cancel-interaction-id", "--seed", "--label":
 			if !hasValue {
 				i++
-				if i >= len(args) || strings.HasPrefix(args[i], "-") {
+				if i >= len(args) || (name != "--seed" && strings.HasPrefix(args[i], "-")) {
 					return o, fmt.Errorf("%s requires a value", name)
 				}
 				value = args[i]
@@ -171,7 +198,7 @@ func parseArgs(args []string) (options, error) {
 				explicitOutput = true
 			case "-m", "--model":
 				o.model = value
-				explicitModel = true
+				o.explicitModel = true
 			case "-a", "--aspect":
 				o.aspect = value
 			case "--resolution":
@@ -196,6 +223,34 @@ func parseArgs(args []string) (options, error) {
 				o.lastFrame = value
 			case "--previous-interaction-id":
 				o.previousInteractionID = value
+			case "--vertex-project":
+				o.vertexProject = value
+			case "--vertex-traffic":
+				o.vertexTraffic = value
+			case "--gcs-output":
+				o.gcsOutput = value
+			case "--delivery":
+				o.delivery = value
+			case "--get-interaction-id":
+				o.getInteractionID = value
+			case "--cancel-interaction-id":
+				o.cancelInteractionID = value
+			case "--seed":
+				seed, err := strconv.ParseInt(value, 10, 32)
+				if err != nil {
+					return o, errors.New("--seed requires a 32-bit integer")
+				}
+				n := int32(seed)
+				o.seed = &n
+			case "--label":
+				key, label, ok := strings.Cut(value, "=")
+				if !ok || key == "" {
+					return o, errors.New("--label requires key=value")
+				}
+				if o.labels == nil {
+					o.labels = make(map[string]string)
+				}
+				o.labels[key] = label
 			}
 		default:
 			return o, fmt.Errorf("unknown option: %s", name)
@@ -204,21 +259,14 @@ func parseArgs(args []string) (options, error) {
 	if o.help {
 		return o, nil
 	}
-	if len(positional) != 1 || strings.TrimSpace(positional[0]) == "" {
-		return o, errors.New("provide one quoted, nonempty prompt")
-	}
-	o.prompt = positional[0]
 	if id, ok := models[o.model]; ok {
 		o.model = id
 	}
-	if o.video {
-		if o.previousInteractionID != "" && strings.TrimSpace(o.previousInteractionID) != o.previousInteractionID {
-			return o, errors.New("previous interaction ID must not contain surrounding whitespace")
-		}
-		if explicitModel && !strings.HasPrefix(o.model, "gemini-omni-") {
+	if o.video || o.vertexProject != "" || o.getInteractionID != "" || o.cancelInteractionID != "" {
+		if o.explicitModel && !strings.HasPrefix(o.model, "gemini-omni-") {
 			return o, errors.New("--video requires an Omni model")
 		}
-		if !explicitModel {
+		if !o.explicitModel {
 			o.model = defaultVideoModel
 		}
 	}
@@ -229,19 +277,15 @@ func parseArgs(args []string) (options, error) {
 	if strings.ContainsAny(o.model, "/?# \t\n") {
 		return o, errors.New("invalid model ID")
 	}
+	if len(positional) == 1 && strings.TrimSpace(positional[0]) != "" {
+		o.prompt = positional[0]
+	} else if len(positional) != 0 || !o.video || (o.task != "upscale" && o.getInteractionID == "" && o.cancelInteractionID == "") {
+		return o, errors.New("provide one quoted, nonempty prompt")
+	}
 	validAspects := []string{"1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"}
 	if o.video {
-		if o.task != "" && !containsValue([]string{"text_to_video", "image_to_video", "reference_to_video", "edit", "extend"}, o.task) {
-			return o, fmt.Errorf("unsupported video task: %s", o.task)
-		}
-		if o.lastFrame != "" && o.firstFrame == "" {
-			return o, errors.New("--last-frame requires --first-frame")
-		}
-		if o.firstFrame != "" && (o.task == "text_to_video" || o.task == "edit" || o.task == "extend") {
-			return o, errors.New("frame inputs require an image or reference video task")
-		}
-		if o.task == "text_to_video" && (o.input != "" || o.firstFrame != "") {
-			return o, errors.New("text_to_video does not accept media inputs")
+		if explicitOutput && (o.background || o.cancelInteractionID != "") {
+			return o, errors.New("--output applies when saving a video")
 		}
 		validAspects = []string{"9:16", "16:9"}
 	}
@@ -254,43 +298,15 @@ func parseArgs(args []string) (options, error) {
 		return o, errors.New("response JSON path must differ from media inputs")
 	}
 	if o.video {
-		if o.transparent || o.intermediates {
-			return o, errors.New("transparent output and intermediates are image-only options")
-		}
-		if o.resolution != "" && !containsValue([]string{"360p", "720p", "1080p", "4k"}, o.resolution) {
-			return o, fmt.Errorf("unsupported video resolution: %s", o.resolution)
-		}
-		if o.duration != "" {
-			seconds := strings.TrimSuffix(o.duration, "s")
-			if seconds == "" || strings.Trim(seconds, "0123456789") != "" {
-				return o, errors.New("video duration must be 3 to 10 whole seconds")
-			}
-			n, err := strconv.Atoi(seconds)
-			if err != nil || n < 3 || n > 10 {
-				return o, errors.New("video duration must be 3 to 10 whole seconds")
-			}
-			o.duration = strconv.Itoa(n) + "s"
-		}
 		if !explicitOutput {
 			o.output = "output.mp4"
 		}
-		if !strings.EqualFold(filepath.Ext(o.output), ".mp4") {
-			return o, errors.New("video output must have a .mp4 extension")
-		}
-		if collision, err := sameLocalPath(o.session, o.output); err != nil {
-			return o, err
-		} else if collision {
-			return o, errors.New("session path must differ from video output")
-		}
-		if collision, err := pathsCollide(o.responseJSON, o.output, o.session); err != nil {
-			return o, err
-		} else if collision {
-			return o, errors.New("response JSON path must differ from video output and session")
-		}
-		return o, nil
+		err := o.validateVideoOptions()
+		return o, err
 	}
-	if o.task != "" || o.firstFrame != "" || o.lastFrame != "" || o.previousInteractionID != "" {
-		return o, errors.New("video task, frame, and interaction options require an Omni video model")
+	if o.task != "" || o.firstFrame != "" || o.lastFrame != "" || o.previousInteractionID != "" ||
+		o.delivery != "" || o.background || o.stream || o.seed != nil || len(o.labels) != 0 || o.gcsOutput != "" || o.vertexTraffic != "" {
+		return o, errors.New("video options require an Omni video model")
 	}
 	if o.resolution != "" {
 		if o.imageSize != "" && o.imageSize != o.resolution {
@@ -600,7 +616,7 @@ func main() {
 		return
 	}
 	key := resolveAPIKey()
-	if key == "" {
+	if key == "" && o.vertexProject == "" {
 		fmt.Fprintln(os.Stderr, "Error: GEMINI_API_KEY environment variable is required")
 		os.Exit(1)
 	}
@@ -612,6 +628,15 @@ func main() {
 		defer timeoutCancel()
 		ctx = videoCtx
 		client.httpClient = &http.Client{Timeout: 15 * time.Minute}
+		if o.vertexProject != "" {
+			client.vertexProject = o.vertexProject
+			client.vertexTraffic = o.vertexTraffic
+			client.vertexToken, err = vertexAccessToken(ctx)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Error:", err)
+				os.Exit(1)
+			}
+		}
 	}
 	if err := run(ctx, o, client, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)

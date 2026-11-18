@@ -21,6 +21,7 @@ type videoSession struct {
 	Version           int    `json:"version"`
 	Model             string `json:"model"`
 	LastInteractionID string `json:"last_interaction_id"`
+	VertexProject     string `json:"vertex_project,omitempty"`
 }
 
 func loadVideoSession(path, model string) (videoSession, error) {
@@ -42,7 +43,10 @@ func loadVideoSession(path, model string) (videoSession, error) {
 	if loaded.Kind != "video" || loaded.Version != 1 {
 		return session, errors.New("session file is not a supported video session")
 	}
-	if loaded.Model != model {
+	if !strings.HasPrefix(loaded.Model, "gemini-omni-") {
+		return session, errors.New("video session has no valid Omni model")
+	}
+	if model != "" && loaded.Model != model {
 		return session, fmt.Errorf("video session model %q does not match selected model %q", loaded.Model, model)
 	}
 	if strings.TrimSpace(loaded.LastInteractionID) == "" {
@@ -69,7 +73,7 @@ func videoInputPaths(o options) ([]string, int, error) {
 		if path == "" {
 			continue
 		}
-		mimeType, _, err := mediaMIME(path)
+		mimeType, _, err := omniMediaMIME(path)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -136,10 +140,38 @@ func videoRolePrompt(prompt, task, previousID string, parts []omniInput, frameCo
 	return strings.Join(declarations, " ") + " " + prompt
 }
 
+func omni12Prompt(prompt, task, previousID string, frameCount, imageCount int) string {
+	switch frameCount {
+	case 1:
+		return "Use the first image as the starting frame. " + prompt
+	case 2:
+		return "Use the first image as the starting frame and the second image as the ending frame. " + prompt
+	}
+	if imageCount > 0 && (task == "edit" || task == "extend" || task == "reference_to_video" || previousID != "") {
+		return "Use the images as references. " + prompt
+	}
+	return prompt
+}
+
 func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenerator, out io.Writer) error {
 	start := time.Now()
-	session, err := loadVideoSession(o.session, o.model)
+	sessionModel := o.model
+	if !o.explicitModel && o.model == defaultVideoModel {
+		sessionModel = ""
+	}
+	session, err := loadVideoSession(o.session, sessionModel)
 	if err != nil {
+		return err
+	}
+	if session.Model == "" {
+		session.Model = o.model
+	}
+	if session.LastInteractionID != "" && session.VertexProject != o.vertexProject {
+		return errors.New("video session belongs to a different API or Google Cloud project")
+	}
+	session.VertexProject = o.vertexProject
+	o.model = session.Model
+	if err := o.validateVideoModelOptions(); err != nil {
 		return err
 	}
 	previousID := o.previousInteractionID
@@ -155,7 +187,7 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 	}
 	imageCount, videoCount := 0, 0
 	for _, path := range paths {
-		mimeType, isVideo, err := mediaMIME(path)
+		mimeType, isVideo, err := omniMediaMIME(path)
 		if err != nil {
 			return err
 		}
@@ -163,6 +195,8 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 			videoCount++
 		} else if strings.HasPrefix(mimeType, "image/") {
 			imageCount++
+		} else {
+			return fmt.Errorf("Omni input %q must be an image or video", path)
 		}
 	}
 	switch o.task {
@@ -182,19 +216,52 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 		if videoCount == 0 && previousID == "" {
 			return fmt.Errorf("%s requires a video input or previous interaction", o.task)
 		}
+	case "upscale":
+		if (previousID == "" && (videoCount != 1 || len(paths) != 1)) ||
+			(previousID != "" && len(paths) != 0) {
+			return errors.New("upscaling requires one input video or a previous interaction")
+		}
+	}
+	if o.model == defaultVideoModel {
+		if err := o.validateOmni12Media(previousID, frameCount, imageCount, videoCount); err != nil {
+			return err
+		}
 	}
 	parts, err := client.prepareOmniInputs(ctx, paths)
 	if err != nil {
 		return err
 	}
-	prompt := videoRolePrompt(o.prompt, o.task, previousID, parts, frameCount)
+	prompt := o.prompt
+	if o.model == defaultVideoModel {
+		prompt = omni12Prompt(prompt, o.task, previousID, frameCount, imageCount)
+	} else {
+		prompt = videoRolePrompt(prompt, o.task, previousID, parts, frameCount)
+	}
 	request := videoGenerationRequest{
 		Model: o.model, Prompt: prompt, Inputs: parts,
 		Aspect: o.aspect, Resolution: o.resolution, Duration: o.duration,
 		Task: o.task, PreviousInteractionID: previousID,
-		Store: o.session != "" || previousID != "",
+		Store:    o.session != "" || previousID != "" || o.stream || o.background,
+		Delivery: o.delivery, GCSOutput: o.gcsOutput, GetInteractionID: o.getInteractionID,
+		CancelInteractionID: o.cancelInteractionID,
+		Seed: o.seed, Labels: o.labels, Background: o.background, CaptureResponse: o.responseJSON != "",
 	}
-	fmt.Fprintln(out, "Generating video...")
+	if o.vertexProject != "" && frameCount > 0 && request.Task == "" && frameCount == len(parts) {
+		request.Task = "image_to_video"
+	}
+	if o.stream {
+		request.StreamProgress = func(message string) { fmt.Fprintln(out, message) }
+	}
+	switch {
+	case o.cancelInteractionID != "":
+		fmt.Fprintln(out, "Cancelling video interaction...")
+	case o.getInteractionID != "":
+		fmt.Fprintln(out, "Waiting for video interaction...")
+	case o.background:
+		fmt.Fprintln(out, "Submitting video interaction...")
+	default:
+		fmt.Fprintln(out, "Generating video...")
+	}
 	apiStart := time.Now()
 	result, err := client.generateVideoAdvanced(ctx, request)
 	apiTime := time.Since(apiStart)
@@ -207,6 +274,17 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if o.background || o.cancelInteractionID != "" {
+		fmt.Fprintf(out, "Interaction ID: %s\n", result.InteractionID)
+		if result.Status != "" {
+			fmt.Fprintf(out, "Status: %s\n", result.Status)
+		}
+		if o.timings {
+			total := time.Since(start)
+			fmt.Fprintf(out, "Timing: API %s, local %s, total %s\n", apiTime.Round(time.Millisecond), (total - apiTime).Round(time.Millisecond), total.Round(time.Millisecond))
+		}
+		return saveVideoResponse(o.responseJSON, result.RawResponse)
+	}
 	if result.VideoStream != nil {
 		downloadStart := time.Now()
 		err = saveVideoStream(ctx, o.output, result.VideoStream)
@@ -217,13 +295,8 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 	if err != nil {
 		return err
 	}
-	if o.responseJSON != "" {
-		if len(result.RawResponse) == 0 {
-			return errors.New("Gemini returned no raw response to save")
-		}
-		if err := atomicWriteFile(o.responseJSON, append([]byte(nil), result.RawResponse...), 0o600); err != nil {
-			return fmt.Errorf("save video response JSON: %w", err)
-		}
+	if err := saveVideoResponse(o.responseJSON, result.RawResponse); err != nil {
+		return err
 	}
 	if request.Store {
 		if result.InteractionID == "" {
@@ -235,12 +308,28 @@ func runAdvancedVideo(ctx context.Context, o options, client videoAdvancedGenera
 		}
 	}
 	fmt.Fprintf(out, "Done! Video saved to: %s\n", o.output)
-	if request.Store {
+	if request.Store && !o.stream {
 		fmt.Fprintf(out, "Interaction ID: %s\n", result.InteractionID)
+	}
+	for _, text := range result.Text {
+		fmt.Fprintln(out, text)
 	}
 	if o.timings {
 		total := time.Since(start)
 		fmt.Fprintf(out, "Timing: API %s, local %s, total %s\n", apiTime.Round(time.Millisecond), (total - apiTime).Round(time.Millisecond), total.Round(time.Millisecond))
+	}
+	return nil
+}
+
+func saveVideoResponse(path string, raw []byte) error {
+	if path == "" {
+		return nil
+	}
+	if len(raw) == 0 {
+		return errors.New("Gemini returned no raw response to save")
+	}
+	if err := atomicWriteFile(path, raw, 0o600); err != nil {
+		return fmt.Errorf("save video response JSON: %w", err)
 	}
 	return nil
 }
