@@ -56,7 +56,7 @@ func TestCLIHelpAndVersionDoNotGenerate(t *testing.T) {
 		if err != nil || len(generated) != 0 {
 			t.Fatalf("%v: generated %d, err %v", args, len(generated), err)
 		}
-		for _, want := range []string{"General:", "Image:", "Video:", "Video jobs:", "Google Cloud video:", "--cancel-interaction-id <id>", "batch ", "tts ", "Models:"} {
+		for _, want := range []string{"General:", "Image:", "Video:", "Video jobs:", "Google Cloud video:", "--cancel-interaction-id <id>", "batch ", "tts ", "music ", "Models:"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%v: help is missing %q", args, want)
 			}
@@ -91,7 +91,7 @@ func TestCLIHelpListsEveryFlag(t *testing.T) {
 }
 
 func TestCLICommandNamesCanBePrompts(t *testing.T) {
-	for _, prompt := range []string{"help", "batch", "tts", "-a prompt"} {
+	for _, prompt := range []string{"help", "batch", "tts", "music", "-a prompt"} {
 		_, generated, err := runCLI("--", prompt)
 		if err != nil || len(generated) != 1 || generated[0].prompt != prompt {
 			t.Fatalf("prompt %q: %+v, %v", prompt, generated, err)
@@ -206,6 +206,35 @@ func TestCLITTSCommands(t *testing.T) {
 		{"tts", "hello", "-v", "Puck", "--style=warm", "-o", "-"},
 		{"tts", "-vPuck", "--", "voices"},
 		{"tts", "voice", "get", "voice_123"},
+	} {
+		if _, _, err := runCLI(args...); err == nil || isUsageError(err) || err.Error() != missingAPIKeyMessage {
+			t.Errorf("%v: want missing key error, got %v", args, err)
+		}
+	}
+}
+
+func TestCLIMusicCommand(t *testing.T) {
+	for _, args := range []string{"music", "music --help", "help music", "music -h a song"} {
+		out, _, err := runCLI(strings.Fields(args)...)
+		if err != nil || out != musicHelp {
+			t.Errorf("%q: unexpected help %q, err %v", args, out, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"music", "a song", "--wat"},
+		{"music", "a", "song"},
+		{"music", "a song", "-o", "--play"},
+		{"music", "a song", "-o", "song.ogg"},
+		{"music", "a song", "--format="},
+		{"--video", "music", "a song"},
+	} {
+		if _, generated, err := runCLI(args...); !isUsageError(err) || len(generated) != 0 {
+			t.Errorf("%v: want usage error, got %v", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"music", "a song", "-m", "clip", "--instrumental", "-o", "-"},
+		{"music", "-mclip", "--format=wav", "--", "--help"},
 	} {
 		if _, _, err := runCLI(args...); err == nil || isUsageError(err) || err.Error() != missingAPIKeyMessage {
 			t.Errorf("%v: want missing key error, got %v", args, err)

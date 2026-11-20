@@ -1,6 +1,6 @@
 # generate_media
 
-Generate images, videos, and speech via Gemini. The Go CLI is a fast, standalone binary with no runtime dependencies. Images are the default: image mode accepts PNG, JPEG, GIF, WebP, HEIC, HEIF, PDF, and video inputs and writes PNG or JPEG output. Add `--video` to create an MP4 with Gemini Omni from a prompt, images, or uploaded video. Optionally produce a transparent PNG using difference matting. Use `generate_media tts` for text to speech with Gemini 3.8 Flash TTS and Flash-Lite TTS.
+Generate images, videos, speech, and music via Gemini. The Go CLI is a fast, standalone binary with no runtime dependencies. Images are the default: image mode accepts PNG, JPEG, GIF, WebP, HEIC, HEIF, PDF, and video inputs and writes PNG or JPEG output. Add `--video` to create an MP4 with Gemini Omni from a prompt, images, or uploaded video. Optionally produce a transparent PNG using difference matting. Use `generate_media tts` for text to speech with Gemini 3.8 Flash TTS and Flash-Lite TTS. Use `generate_media music` for songs and clips with Lyria 3.5.
 
 ## How transparency works
 
@@ -64,7 +64,7 @@ NANOBANANA_BUNDLE_KEY="your-key" ./build.sh
 ./dist/generate_media "continue the composition" --session scene.json -i sketch.png
 ```
 
-Options can go before or after the prompt. Run `generate_media --help` (or `generate_media help`) for grouped options, `generate_media --version` for the build version, and `generate_media completion zsh` (or `bash`, `fish`, `powershell`) for a shell completion script. Because `help`, `tts`, `batch`, and `completion` are commands, pass a prompt that is one of those words, or that starts with a dash, after `--`: `generate_media -- help`. Mistakes in how a command is invoked exit with status 2; failed generations and API errors exit with status 1.
+Options can go before or after the prompt. Run `generate_media --help` (or `generate_media help`) for grouped options, `generate_media --version` for the build version, and `generate_media completion zsh` (or `bash`, `fish`, `powershell`) for a shell completion script. Because `help`, `tts`, `music`, `batch`, and `completion` are commands, pass a prompt that is one of those words, or that starts with a dash, after `--`: `generate_media -- help`. Mistakes in how a command is invoked exit with status 2; failed generations and API errors exit with status 1.
 
 Video uses Gemini Omni 1.2 Flash by default, with synchronized speech, music, and sound effects described in the prompt. The default aspect ratio is `16:9` and the default resolution is `720p`. Use `--aspect 9:16` for portrait video. Set `--duration` to a whole number from 3 to 15 seconds for generation or editing. First-and-last-frame interpolation, extension, and Omni 1.1 support 3 to 10 seconds per turn. Omni infers the task from the prompt and inputs when you omit `--task`. Video mode accepts image and video inputs through `-i`. [Gemini Omni guide](https://ai.google.dev/gemini-api/docs/omni)
 
@@ -200,6 +200,40 @@ Dialogue with exactly two prebuilt voices uses Gemini's native multi-speaker mod
 ```
 
 `tts voices` searches the prebuilt voices, the Extended Voice Library of more than 2,000 voices, and your own voices. It accepts `--language`, `--region`, `--gender`, `--pitch`, `--type`, `--accent`, `--persona`, `--context`, `--search`, `--page-size`, `--page-token`, `--all`, and `--json`. Voice design and remix create stored `voice_…` voices and save a sample WAV. Cloning needs 10–30 seconds of clean speech plus a recording of the same adult speaker reading Google's consent statement; only clone voices you have permission to use. `--no-store` returns a temporary `voicekey_…` that expires after 7 days. Custom voices require a paid-tier project, which can store up to 200 voices; stored voices expire one year after last use. All generated speech carries a SynthID watermark.
+
+## Music
+
+`generate_media music` uses [Lyria 3.5](https://ai.google.dev/gemini-api/docs/music-generation) through the Interactions API with the same `GEMINI_API_KEY`.
+
+```bash
+./dist/generate_media music "An upbeat synth-pop song about a road trip at dawn"          # → output.mp3
+./dist/generate_media music "Lo-fi hip hop beat, 80 BPM, mellow Rhodes" -m clip --instrumental
+./dist/generate_media music "Dreamy indie pop, female vocals" --lyrics lyrics.txt -o dream.wav
+./dist/generate_media music -i sunset.jpg "An ambient track inspired by this image" --play
+./dist/generate_media music -f brief.txt -o - | ffplay -nodisp -autoexit -
+```
+
+| Alias | Model ID | |
+|---|---|---|
+| `song` | `lyria-3.5` | Full songs with verses, choruses, and bridges (default) |
+| `clip` | `lyria-3-clip-preview` | 30-second clips, loops, and previews |
+
+Lyria takes every instruction from the prompt, so describe the genre, mood, instruments, tempo, key, and length there. Tag sections in lyrics with `[Verse 1]`, `[Chorus]`, and `[Bridge]`. To control timing, write one segment per line, such as `[0:00 - 0:10] Intro: soft piano`. Lyrics follow the language of the prompt. `--lyrics` appends your lyrics to the prompt and `--instrumental` asks for a track without vocals.
+
+| Flag | Description |
+|---|---|
+| `-o, --output <path>` | `.mp3` (default `output.mp3`) or `.wav`, or `-` for audio on stdout |
+| `-m, --model <name>` | `song` (default), `clip`, or a full model ID |
+| `-i, --input <paths>` | Up to 10 reference images (PNG, JPEG, GIF, WebP, HEIC, or HEIF); repeat or comma-separate |
+| `-f, --file <path>` | Read the prompt from a file, or `-` for stdin |
+| `--lyrics <path>` | Sing the lyrics in this file, or `-` for stdin |
+| `--instrumental` | Ask for a track without vocals |
+| `--format <type>` | `mp3` or `wav`; defaults to the output extension |
+| `--play` | Play the saved audio (`afplay`, `ffplay`, `paplay`, or `aplay`) |
+| `--response-json <path>` | Save the raw API response |
+| `--timings` | Report API time and token usage |
+
+Lyria returns the lyrics and section structure it wrote for the track; they are saved beside the audio as `<output>-lyrics.txt`. Reference images share a 14 MiB request budget. Music generation is a single turn: to change a track, adjust the prompt and generate again. Results vary between calls with the same prompt. Requests that imitate a specific artist's voice or reproduce copyrighted lyrics are blocked, and all output carries Google's SynthID watermark.
 
 ## Batch image generation
 
