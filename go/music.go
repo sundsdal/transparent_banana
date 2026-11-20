@@ -175,6 +175,30 @@ func parseMusicArgs(args []string) (musicOptions, error) {
 			return o, fmt.Errorf("output path %s must differ from the inputs and other outputs", path)
 		}
 	}
+	if o.output == "-" {
+		return o, nil
+	}
+	// Gemini may answer with the other container or with several tracks, which
+	// are saved under the output name with the returned extension and -2, -3, …
+	ext := filepath.Ext(o.output)
+	stem := strings.TrimSuffix(o.output, ext)
+	for _, path := range append(sources, o.responseJSON) {
+		if path == "" {
+			continue
+		}
+		reserved, err := pathsCollide(path, stem+".mp3", stem+".wav")
+		for _, audioExt := range []string{ext, ".mp3", ".wav"} {
+			if err == nil && !reserved {
+				reserved, err = numberedArtifactCollision(path, stem, audioExt, 2)
+			}
+		}
+		if err != nil {
+			return o, err
+		}
+		if reserved {
+			return o, fmt.Errorf("%s is reserved for audio: Gemini may return MP3 or WAV, or several numbered tracks", path)
+		}
+	}
 	return o, nil
 }
 
@@ -310,6 +334,7 @@ func runMusic(ctx context.Context, o musicOptions, client musicGenerator, stdin 
 		for i, track := range result.Tracks {
 			path := numberedImagePath(o.output, i+1)
 			// Keep the audio even if Gemini ignored the requested container.
+			// parseMusicArgs reserved these names against inputs and outputs.
 			if ext := filepath.Ext(path); !strings.EqualFold(ext, track.Ext) {
 				path = strings.TrimSuffix(path, ext) + track.Ext
 				fmt.Fprintf(log, "Note: Gemini returned %s audio; saving to %s\n", strings.ToUpper(track.Ext[1:]), path)

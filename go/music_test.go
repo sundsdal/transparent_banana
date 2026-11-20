@@ -50,6 +50,16 @@ func TestParseMusicArgs(t *testing.T) {
 	if o, err = parseMusicArgs([]string{"--lyrics", "words.txt"}); err != nil || o.prompt != "" {
 		t.Fatalf("lyrics alone: %+v, %v", o, err)
 	}
+	for _, args := range [][]string{
+		{"song", "-o", "take.mp3", "--response-json", "take.json"},
+		{"song", "-o", "take.mp3", "--response-json", "take-1.mp3"},
+		{"-f", "take-two.mp3.txt", "-o", "take.mp3"},
+		{"song", "-o", "-", "--response-json", "output.mp3"},
+	} {
+		if _, err := parseMusicArgs(args); err != nil {
+			t.Errorf("parseMusicArgs(%q): %v", args, err)
+		}
+	}
 	if o, err = parseMusicArgs([]string{"-h"}); err != nil || !o.help {
 		t.Fatal("help should not need a prompt")
 	}
@@ -74,6 +84,11 @@ func TestParseMusicArgs(t *testing.T) {
 		{"song", "-i", "cover.png", "--response-json", "cover.png"},
 		{"song", "-o", "take.mp3", "--response-json", "take.mp3"},
 		{"song", "-o", "take.mp3", "--response-json", "./take-lyrics.txt"},
+		{"song", "-o", "take.wav", "--response-json", "take.mp3"},
+		{"song", "-i", "take.wav", "-o", "take.mp3"},
+		{"-f", "take-2.mp3", "-o", "take.mp3"},
+		{"song", "-o", "take.WAV", "--response-json", "take-3.WAV"},
+		{"song", "-o", "take.mp3", "--response-json", "take-12.wav"},
 	} {
 		if _, err := parseMusicArgs(args); err == nil {
 			t.Errorf("parseMusicArgs(%q) should fail", args)
