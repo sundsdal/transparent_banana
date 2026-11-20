@@ -14,64 +14,147 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
-const batchHelp = `Usage:
-  generate_media batch submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]
-  generate_media batch status <batches/id>
-  generate_media batch download <batches/id> [--output-dir <directory>]
-  generate_media batch cancel <batches/id>
+const batchLong = `Submit and manage asynchronous image batches with the Gemini Batch API.
 
 Each manifest line is {"key":"unique-name","request":{"contents":[...]}}.
 The request may include any GenerateContentRequest fields, such as generationConfig.
-Download saves batch-results.jsonl and extracts visible images and text.
-`
+Download saves batch-results.jsonl and extracts visible images and text.`
 
 var batchResourceID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var batchModelID = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
+// runBatch executes a batch subcommand line, such as "status batches/id", with this client.
 func (c *geminiClient) runBatch(ctx context.Context, args []string, out io.Writer) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
-		_, err := io.WriteString(out, batchHelp)
-		return err
+	cmd := newBatchCmd(func() (*geminiClient, error) {
+		if strings.TrimSpace(c.apiKey) == "" {
+			return nil, errors.New(missingAPIKeyMessage)
+		}
+		return c, nil
+	})
+	cmd.SetArgs(args)
+	cmd.SetOut(out)
+	return cmd.ExecuteContext(ctx)
+}
+
+// newBatchCmd builds the batch command tree. The client is requested only
+// after a subcommand's arguments are valid, so usage mistakes never need an API key.
+func newBatchCmd(client func() (*geminiClient, error)) *cobra.Command {
+	batch := &cobra.Command{
+		Use:                        "batch",
+		Short:                      "Submit and manage asynchronous image batches",
+		Long:                       batchLong,
+		SilenceUsage:               true,
+		SilenceErrors:              true,
+		DisableFlagsInUseLine:      true,
+		SuggestionsMinimumDistance: 2,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 || args[0] == "help" {
+				return nil
+			}
+			message := fmt.Sprintf("unknown batch command %q", args[0])
+			if suggestions := cmd.SuggestionsFor(args[0]); len(suggestions) > 0 {
+				message += "; did you mean " + strings.Join(suggestions, " or ") + "?"
+			}
+			return usageError{errors.New(message)}
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	if strings.TrimSpace(c.apiKey) == "" {
-		return errors.New("Gemini API key is required")
+	// The root command's grouped generation help does not apply to this subtree.
+	batch.SetUsageTemplate((&cobra.Command{}).UsageTemplate())
+	batch.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
+
+	batchName := func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return usagef("usage: %s", cmd.UseLine())
+		}
+		if _, err := validateBatchName(args[0]); err != nil {
+			return usageError{err}
+		}
+		return nil
 	}
-	switch args[0] {
-	case "submit":
-		return c.batchSubmit(ctx, args[1:], out)
-	case "status":
-		if len(args) != 2 {
-			return errors.New("usage: generate_media batch status <batches/id>")
-		}
-		name, err := validateBatchName(args[1])
-		if err != nil {
-			return err
-		}
-		body, err := c.batchJSON(ctx, http.MethodGet, "/"+name, nil)
-		if err != nil {
-			return err
-		}
-		return printBatchJSON(out, body)
-	case "cancel":
-		if len(args) != 2 {
-			return errors.New("usage: generate_media batch cancel <batches/id>")
-		}
-		name, err := validateBatchName(args[1])
-		if err != nil {
-			return err
-		}
-		if _, err = c.batchJSON(ctx, http.MethodPost, "/"+name+":cancel", nil); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintf(out, "Cancellation requested: %s\n", name)
-		return err
-	case "download":
-		return c.batchDownload(ctx, args[1:], out)
-	default:
-		return fmt.Errorf("unknown batch command %q\n%s", args[0], batchHelp)
+
+	var model, displayName string
+	submit := &cobra.Command{
+		Use:                   "submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]",
+		Short:                 "Upload a JSONL manifest and start a batch",
+		DisableFlagsInUseLine: true,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return usagef("usage: %s", cmd.UseLine())
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := client()
+			if err != nil {
+				return err
+			}
+			return c.batchSubmit(cmd.Context(), args[0], model, displayName, cmd.OutOrStdout())
+		},
 	}
+	submit.Flags().StringVarP(&model, "model", "m", "flash", "Alias or full ID of the `model`")
+	submit.Flags().StringVar(&displayName, "name", "", "Display `name` for the batch (default: the manifest file name)")
+
+	status := &cobra.Command{
+		Use:                   "status <batches/id>",
+		Short:                 "Print a batch's status as JSON",
+		Args:                  batchName,
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := client()
+			if err != nil {
+				return err
+			}
+			body, err := c.batchJSON(cmd.Context(), http.MethodGet, "/"+args[0], nil)
+			if err != nil {
+				return err
+			}
+			return printBatchJSON(cmd.OutOrStdout(), body)
+		},
+	}
+
+	var outputDir string
+	download := &cobra.Command{
+		Use:                   "download <batches/id> [--output-dir <directory>]",
+		Short:                 "Save a completed batch's results and extract its images and text",
+		Args:                  batchName,
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if outputDir == "" {
+				return usagef("--output-dir requires a nonempty value")
+			}
+			c, err := client()
+			if err != nil {
+				return err
+			}
+			return c.batchDownload(cmd.Context(), args[0], outputDir, cmd.OutOrStdout())
+		},
+	}
+	download.Flags().StringVar(&outputDir, "output-dir", ".", "Save results in this `directory`")
+
+	cancel := &cobra.Command{
+		Use:                   "cancel <batches/id>",
+		Short:                 "Request cancellation of a running batch",
+		Args:                  batchName,
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := client()
+			if err != nil {
+				return err
+			}
+			if _, err := c.batchJSON(cmd.Context(), http.MethodPost, "/"+args[0]+":cancel", nil); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Cancellation requested: %s\n", args[0])
+			return err
+		},
+	}
+	batch.AddCommand(submit, status, download, cancel)
+	return batch
 }
 
 func validateBatchName(name string) (string, error) {
@@ -82,29 +165,12 @@ func validateBatchName(name string) (string, error) {
 	return name, nil
 }
 
-func (c *geminiClient) batchSubmit(ctx context.Context, args []string, out io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: generate_media batch submit <manifest.jsonl> [--model <alias-or-id>] [--name <display-name>]")
+func (c *geminiClient) batchSubmit(ctx context.Context, path, model, name string, out io.Writer) error {
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
-	path := args[0]
-	model := defaultModel
-	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if name == "" || name == "." {
 		name = "generate-batch"
-	}
-	for i := 1; i < len(args); i++ {
-		if i+1 >= len(args) {
-			return fmt.Errorf("missing value for %s", args[i])
-		}
-		switch args[i] {
-		case "--model", "-m":
-			model = args[i+1]
-		case "--name":
-			name = args[i+1]
-		default:
-			return fmt.Errorf("unknown batch submit option %q", args[i])
-		}
-		i++
 	}
 	if resolved, ok := models[model]; ok {
 		model = resolved
@@ -236,21 +302,7 @@ func printBatchJSON(out io.Writer, body []byte) error {
 	return err
 }
 
-func (c *geminiClient) batchDownload(ctx context.Context, args []string, out io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: generate_media batch download <batches/id> [--output-dir <directory>]")
-	}
-	name, err := validateBatchName(args[0])
-	if err != nil {
-		return err
-	}
-	dir := "."
-	if len(args) > 1 {
-		if len(args) != 3 || args[1] != "--output-dir" || args[2] == "" {
-			return errors.New("usage: generate_media batch download <batches/id> [--output-dir <directory>]")
-		}
-		dir = args[2]
-	}
+func (c *geminiClient) batchDownload(ctx context.Context, name, dir string, out io.Writer) error {
 	body, err := c.batchJSON(ctx, http.MethodGet, "/"+name, nil)
 	if err != nil {
 		return err

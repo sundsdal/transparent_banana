@@ -10,7 +10,7 @@ Generate images, videos, and speech via Gemini. The Go CLI is a fast, standalone
 
 ## Go CLI
 
-Requires Go 1.23 or later.
+Requires Go 1.23 or later. The CLI is built on [Cobra](https://github.com/spf13/cobra); the first build downloads it.
 
 ```bash
 export GEMINI_API_KEY="your-key"
@@ -63,6 +63,8 @@ NANOBANANA_BUNDLE_KEY="your-key" ./build.sh
 ./dist/generate_media "a city at dusk" --image-size 4K --thinking high --search both --text
 ./dist/generate_media "continue the composition" --session scene.json -i sketch.png
 ```
+
+Options can go before or after the prompt. Run `generate_media --help` (or `generate_media help`) for grouped options, `generate_media --version` for the build version, and `generate_media completion zsh` (or `bash`, `fish`, `powershell`) for a shell completion script. Because `help`, `tts`, `batch`, and `completion` are commands, pass a prompt that is one of those words, or that starts with a dash, after `--`: `generate_media -- help`. Mistakes in how a command is invoked exit with status 2; failed generations and API errors exit with status 1.
 
 Video uses Gemini Omni 1.2 Flash by default, with synchronized speech, music, and sound effects described in the prompt. The default aspect ratio is `16:9` and the default resolution is `720p`. Use `--aspect 9:16` for portrait video. Set `--duration` to a whole number from 3 to 15 seconds for generation or editing. First-and-last-frame interpolation, extension, and Omni 1.1 support 3 to 10 seconds per turn. Omni infers the task from the prompt and inputs when you omit `--task`. Video mode accepts image and video inputs through `-i`. [Gemini Omni guide](https://ai.google.dev/gemini-api/docs/omni)
 
@@ -124,6 +126,8 @@ Standalone upscaling uses a 360p or 720p input up to 15 seconds long. Choose 720
 | `--transparent` | Produce a transparent PNG via difference matting (two API calls) |
 | `--save-intermediates` | Save white/black intermediate images |
 | `--timings` | Report API, local processing, and total time (Go CLI) |
+| `-h, --help` | Show help for the command |
+| `--version` | Show the build version |
 
 ## Models
 
@@ -209,9 +213,9 @@ printf '%s\n' '{"key":"scene-1","request":{"contents":[{"role":"user","parts":[{
 ./dist/generate_media batch cancel batches/ID
 ```
 
-Use the batch name returned by `submit` in place of `batches/ID`. Download saves the raw results JSONL and extracts visible images and text. Run `./dist/generate_media batch --help` for command details.
+Use the batch name returned by `submit` in place of `batches/ID`. Download saves the raw results JSONL and extracts visible images and text. Run `./dist/generate_media batch --help` or `./dist/generate_media batch submit --help` for command details.
 
-On an Apple M2, ten warm `--help` runs had median startup times of **5 ms for Go** and **543 ms for Python** with dependencies already installed. The stripped Go binary was **6.4 MiB**. A synthetic 1024×1024 difference-matting benchmark, including PNG decoding and encoding, took **28 ms/op**. These local measurements exclude network and model latency; they are not end-to-end generation speed claims.
+On an Apple M2, ten warm `--help` runs had median startup times of **5 ms for Go** and **543 ms for Python** with dependencies already installed. The stripped Go binary is about **9 MiB**. A synthetic 1024×1024 difference-matting benchmark, including PNG decoding and encoding, took **28 ms/op**. These local measurements exclude network and model latency; they are not end-to-end generation speed claims.
 
 ## Aspect ratios
 

@@ -6,7 +6,8 @@ output_dir="$script_dir/dist"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/nanobanana-build.XXXXXX")
 trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 
-cp "$script_dir"/*.go "$script_dir/go.mod" "$temp_dir"/
+cp "$script_dir"/*.go "$script_dir/go.mod" "$script_dir/go.sum" "$temp_dir"/
+version=$(git -C "$script_dir" describe --tags --always --dirty 2>/dev/null || echo dev)
 
 (
     cd "$script_dir"
@@ -16,7 +17,7 @@ cp "$script_dir"/*.go "$script_dir/go.mod" "$temp_dir"/
 mkdir -p "$output_dir"
 (
     cd "$temp_dir"
-    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$output_dir/generate_media" .
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$version" -o "$output_dir/generate_media" .
 )
 
 ln -sfn generate_media "$output_dir/generate"
