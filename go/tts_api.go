@@ -362,6 +362,10 @@ func (c *geminiClient) interactionStatusError(status, message string) error {
 
 // apiRequest sends an authenticated JSON request below the Gemini base URL.
 func (c *geminiClient) apiRequest(ctx context.Context, method, path string, body io.Reader, stream bool) (*http.Response, error) {
+	return c.apiRequestWithHeaders(ctx, method, path, body, stream, nil)
+}
+
+func (c *geminiClient) apiRequestWithHeaders(ctx context.Context, method, path string, body io.Reader, stream bool, headers map[string]string) (*http.Response, error) {
 	baseURL := c.baseURL
 	if baseURL == "" {
 		baseURL = defaultGeminiBaseURL
@@ -376,6 +380,9 @@ func (c *geminiClient) apiRequest(ctx context.Context, method, path string, body
 	}
 	if stream {
 		request.Header.Set("Accept", "text/event-stream")
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	client := c.httpClient
 	if client == nil {

@@ -89,7 +89,7 @@ type ttsOptions struct {
 	stream, play, timings, perTurn, help, wav         bool
 }
 
-// cliArgs is a small parser shared by the tts subcommands. Flags may appear
+// cliArgs is a small parser shared by the tts and music commands. Flags may appear
 // before or after positionals; "--" ends flag parsing.
 type cliArgs struct {
 	values     map[string][]string
@@ -393,12 +393,17 @@ func readTTSText(o ttsOptions, stdin io.Reader) (string, error) {
 	if o.file == "" {
 		return o.text, nil
 	}
+	return readTextInput(o.file, stdin)
+}
+
+// readTextInput reads prompt text from a file, or from stdin when path is "-".
+func readTextInput(path string, stdin io.Reader) (string, error) {
 	var data []byte
 	var err error
-	if o.file == "-" {
+	if path == "-" {
 		data, err = io.ReadAll(io.LimitReader(stdin, 1<<20+1))
 	} else {
-		data, err = os.ReadFile(o.file)
+		data, err = os.ReadFile(path)
 	}
 	if err != nil {
 		return "", fmt.Errorf("read text: %w", err)
@@ -678,28 +683,30 @@ func runTTSCommand(ctx context.Context, args []string, client *geminiClient, std
 	return cmd.ExecuteContext(ctx)
 }
 
-// newTTSCmd builds the tts command tree. Each command validates its own
-// arguments with parseCLI and prints its hand-written help, so cobra only
-// routes to it; the flags are registered for routing and shell completion.
-func newTTSCmd(client func() *geminiClient, stdin io.Reader) *cobra.Command {
-	command := func(use, short, help string, valueFlags, boolFlags map[string]string, run func(*cobra.Command, []string) error) *cobra.Command {
-		cmd := &cobra.Command{
-			Use: use, Short: short, RunE: run, Args: cobra.ArbitraryArgs,
-			DisableFlagParsing: true, SilenceUsage: true, SilenceErrors: true,
-		}
-		defineCLIFlags(cmd.Flags(), valueFlags, boolFlags)
-		cmd.SetHelpFunc(func(cmd *cobra.Command, _ []string) { _, _ = io.WriteString(cmd.OutOrStdout(), help) })
-		return cmd
+// newParsedCmd builds a command that validates its own arguments with parseCLI
+// and prints its hand-written help, so cobra only routes to it; the flags are
+// registered for routing and shell completion.
+func newParsedCmd(use, short, help string, valueFlags, boolFlags map[string]string, run func(*cobra.Command, []string) error) *cobra.Command {
+	cmd := &cobra.Command{
+		Use: use, Short: short, RunE: run, Args: cobra.ArbitraryArgs,
+		DisableFlagParsing: true, SilenceUsage: true, SilenceErrors: true,
 	}
-	tts := command("tts [options] <text>", "Generate speech from text", ttsHelp, ttsValueFlags, ttsBoolFlags,
+	defineCLIFlags(cmd.Flags(), valueFlags, boolFlags)
+	cmd.SetHelpFunc(func(cmd *cobra.Command, _ []string) { _, _ = io.WriteString(cmd.OutOrStdout(), help) })
+	return cmd
+}
+
+// newTTSCmd builds the tts command tree.
+func newTTSCmd(client func() *geminiClient, stdin io.Reader) *cobra.Command {
+	tts := newParsedCmd("tts [options] <text>", "Generate speech from text", ttsHelp, ttsValueFlags, ttsBoolFlags,
 		func(cmd *cobra.Command, args []string) error {
 			return runTTSText(cmd.Context(), args, client(), stdin, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		})
-	voices := command("voices [filters]", "List prebuilt, library, and custom voices", voicesHelp, voicesValueFlags(), voicesBoolFlags,
+	voices := newParsedCmd("voices [filters]", "List prebuilt, library, and custom voices", voicesHelp, voicesValueFlags(), voicesBoolFlags,
 		func(cmd *cobra.Command, args []string) error {
 			return runVoicesCommand(cmd.Context(), args, client(), cmd.OutOrStdout())
 		})
-	voice := command("voice <design|remix|clone|get|delete>", "Design, remix, clone, inspect, or delete a custom voice", voiceHelp, voiceValueFlags, voiceBoolFlags,
+	voice := newParsedCmd("voice <design|remix|clone|get|delete>", "Design, remix, clone, inspect, or delete a custom voice", voiceHelp, voiceValueFlags, voiceBoolFlags,
 		func(cmd *cobra.Command, args []string) error {
 			return runVoiceCommand(cmd.Context(), args, client(), cmd.OutOrStdout())
 		})

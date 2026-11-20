@@ -22,16 +22,18 @@ var version = "dev"
 
 const missingAPIKeyMessage = "GEMINI_API_KEY environment variable is required"
 
-const shortHelp = `generate_media — Generate images, videos, and speech via Gemini.
+const shortHelp = `generate_media — Generate images, videos, speech, and music via Gemini.
 
 Usage: generate_media [options] <prompt>
        generate_media tts [options] <text>
+       generate_media music [options] <prompt>
        generate_media batch <submit|status|download|cancel> ...
 
 Examples:
   generate_media "a cat with a hat"
   generate_media "a cat waving" --video --duration 15
   generate_media tts "Have a wonderful day!" -v Puck -s cheerful
+  generate_media music "An upbeat synth-pop song about a road trip"
 Run 'generate_media --help' for full options and examples.
 `
 
@@ -271,7 +273,7 @@ func parseArgs(args []string) (options, error) {
 func newGenerateCmd(values *flagValues, generate func(context.Context, options, io.Writer) error) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "generate_media [options] <prompt>",
-		Long:          "generate_media — Generate images, videos, and speech via Gemini.",
+		Long:          "generate_media — Generate images, videos, speech, and music via Gemini.",
 		Version:       version,
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
@@ -298,15 +300,16 @@ func newGenerateCmd(values *flagValues, generate func(context.Context, options, 
 }
 
 // newRootCmd assembles the full command tree around its two side-effecting dependencies.
-func newRootCmd(generate func(context.Context, options, io.Writer) error, batchClient func() (*geminiClient, error), ttsClient func() *geminiClient) *cobra.Command {
+func newRootCmd(generate func(context.Context, options, io.Writer) error, batchClient func() (*geminiClient, error), audioClient func() *geminiClient) *cobra.Command {
 	root := newGenerateCmd(&flagValues{}, generate)
-	root.AddCommand(newTTSCmd(ttsClient, os.Stdin), newBatchCmd(batchClient))
+	root.AddCommand(newTTSCmd(audioClient, os.Stdin), newMusicCmd(audioClient, os.Stdin), newBatchCmd(batchClient))
 	return root
 }
 
-// ttsAPIClient may have an empty key: commands that do not call the API, such
-// as "tts voices --builtin", work without one.
-func ttsAPIClient() *geminiClient {
+// audioAPIClient serves the tts and music commands. It may have an empty key:
+// commands that do not call the API, such as "tts voices --builtin", work
+// without one.
+func audioAPIClient() *geminiClient {
 	return &geminiClient{apiKey: resolveAPIKey(), httpClient: &http.Client{Timeout: 10 * time.Minute}}
 }
 
@@ -348,7 +351,7 @@ func generateMedia(ctx context.Context, o options, out io.Writer) error {
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	cmd, err := newRootCmd(generateMedia, batchAPIClient, ttsAPIClient).ExecuteContextC(ctx)
+	cmd, err := newRootCmd(generateMedia, batchAPIClient, audioAPIClient).ExecuteContextC(ctx)
 	cancel()
 	if err == nil {
 		return
