@@ -122,12 +122,18 @@ var voicesFilterFlags = map[string]string{
 	"--pitch": "pitch", "--type": "type", "--accent": "accent", "--persona": "persona", "--context": "context",
 }
 
-func runVoicesCommand(ctx context.Context, args []string, client *geminiClient, out io.Writer) error {
+var voicesBoolFlags = map[string]string{"-h": "--help", "--help": "--help", "--all": "--all", "--json": "--json", "--builtin": "--builtin"}
+
+func voicesValueFlags() map[string]string {
 	valueFlags := map[string]string{"--page-size": "--page-size", "--page-token": "--page-token"}
 	for flag := range voicesFilterFlags {
 		valueFlags[flag] = flag
 	}
-	parsed, err := parseCLI(args, valueFlags, map[string]string{"-h": "--help", "--help": "--help", "--all": "--all", "--json": "--json", "--builtin": "--builtin"})
+	return valueFlags
+}
+
+func runVoicesCommand(ctx context.Context, args []string, client *geminiClient, out io.Writer) error {
+	parsed, err := parseCLI(args, voicesValueFlags(), voicesBoolFlags)
 	if err != nil {
 		return usageError{err}
 	}
@@ -254,18 +260,21 @@ func boundedRunes(value string, limit int) string {
 	return string(runes[:limit])
 }
 
+var voiceValueFlags = map[string]string{
+	"-o": "--output", "--output": "--output", "-m": "--model", "--model": "--model",
+	"--description": "--description", "--name": "--name", "--gender": "--gender", "--language": "--language",
+	"--base": "--base", "--source": "--source", "--consent": "--consent",
+}
+
+var voiceBoolFlags = map[string]string{"-h": "--help", "--help": "--help", "--json": "--json", "--no-store": "--no-store"}
+
 func runVoiceCommand(ctx context.Context, args []string, client *geminiClient, out io.Writer) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		_, err := io.WriteString(out, voiceHelp)
 		return err
 	}
 	action := args[0]
-	valueFlags := map[string]string{
-		"-o": "--output", "--output": "--output", "-m": "--model", "--model": "--model",
-		"--description": "--description", "--name": "--name", "--gender": "--gender", "--language": "--language",
-		"--base": "--base", "--source": "--source", "--consent": "--consent",
-	}
-	parsed, err := parseCLI(args[1:], valueFlags, map[string]string{"-h": "--help", "--help": "--help", "--json": "--json", "--no-store": "--no-store"})
+	parsed, err := parseCLI(args[1:], voiceValueFlags, voiceBoolFlags)
 	if err != nil {
 		return usageError{err}
 	}

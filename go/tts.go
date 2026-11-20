@@ -14,6 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 const ttsHelp = `generate_media tts — Text to speech with Gemini 3.8 TTS.
@@ -107,44 +110,61 @@ func (a cliArgs) has(name string) bool {
 	return ok
 }
 
-// parseCLI maps aliases (e.g. "-o") to canonical names (e.g. "--output").
+// defineCLIFlags registers alias maps (e.g. "-o" and "--output" to "--output")
+// as repeatable value flags and boolean flags.
+func defineCLIFlags(flags *pflag.FlagSet, valueFlags, boolFlags map[string]string) {
+	shorthand := map[string]string{}
+	for alias, canonical := range valueFlags {
+		if !strings.HasPrefix(alias, "--") {
+			shorthand[canonical] = strings.TrimPrefix(alias, "-")
+		}
+	}
+	for alias, canonical := range boolFlags {
+		if !strings.HasPrefix(alias, "--") {
+			shorthand[canonical] = strings.TrimPrefix(alias, "-")
+		}
+	}
+	for _, canonical := range valueFlags {
+		if name := strings.TrimPrefix(canonical, "--"); flags.Lookup(name) == nil {
+			flags.StringArrayP(name, shorthand[canonical], nil, "")
+		}
+	}
+	for _, canonical := range boolFlags {
+		if name := strings.TrimPrefix(canonical, "--"); flags.Lookup(name) == nil {
+			flags.BoolP(name, shorthand[canonical], false, "")
+		}
+	}
+}
+
+// parseCLI parses args with the flag rules shared by every generate_media
+// command and reports values under canonical names (e.g. "--output").
 func parseCLI(args []string, valueFlags, boolFlags map[string]string) (cliArgs, error) {
 	parsed := cliArgs{values: map[string][]string{}, bools: map[string]bool{}}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			parsed.positional = append(parsed.positional, args[i+1:]...)
-			break
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			parsed.positional = append(parsed.positional, arg)
-			continue
-		}
-		name, value, hasValue := strings.Cut(arg, "=")
-		if canonical, ok := boolFlags[name]; ok {
-			if hasValue {
-				return parsed, fmt.Errorf("%s does not take a value", name)
-			}
-			parsed.bools[canonical] = true
-			continue
-		}
-		canonical, ok := valueFlags[name]
-		if !ok {
-			return parsed, fmt.Errorf("unknown option: %s", name)
-		}
-		if !hasValue {
-			i++
-			if i >= len(args) || (strings.HasPrefix(args[i], "-") && args[i] != "-") {
-				return parsed, fmt.Errorf("%s requires a value", name)
-			}
-			value = args[i]
-		}
-		if strings.TrimSpace(value) == "" {
-			return parsed, fmt.Errorf("%s requires a nonempty value", name)
-		}
-		parsed.values[canonical] = append(parsed.values[canonical], value)
+	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
+	defineCLIFlags(flags, valueFlags, boolFlags)
+	if err := flags.Parse(args); err != nil {
+		return parsed, err
 	}
-	return parsed, nil
+	var flagErr error
+	flags.Visit(func(f *pflag.Flag) {
+		canonical := "--" + f.Name
+		slice, ok := f.Value.(pflag.SliceValue)
+		if !ok {
+			parsed.bools[canonical] = f.Value.String() == "true"
+			return
+		}
+		for _, value := range slice.GetSlice() {
+			if strings.TrimSpace(value) == "" && flagErr == nil {
+				flagErr = fmt.Errorf("%s requires a nonempty value", canonical)
+			} else if strings.HasPrefix(value, "-") && value != "-" && flagErr == nil {
+				// The next option was consumed as this flag's value.
+				flagErr = fmt.Errorf("%s requires a value", canonical)
+			}
+		}
+		parsed.values[canonical] = slice.GetSlice()
+	})
+	parsed.positional = flags.Args()
+	return parsed, flagErr
 }
 
 var ttsValueFlags = map[string]string{
@@ -649,16 +669,46 @@ func playAudio(ctx context.Context, path string, log io.Writer) error {
 	return nil
 }
 
-// runTTSCommand dispatches "generate_media tts ...".
+// runTTSCommand executes a tts command line, such as "voices --builtin", with this client.
 func runTTSCommand(ctx context.Context, args []string, client *geminiClient, stdin io.Reader, stdout, stderr io.Writer) error {
-	if len(args) > 0 {
-		switch args[0] {
-		case "voices":
-			return runVoicesCommand(ctx, args[1:], client, stdout)
-		case "voice":
-			return runVoiceCommand(ctx, args[1:], client, stdout)
+	cmd := newTTSCmd(func() *geminiClient { return client }, stdin)
+	cmd.SetArgs(args)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cmd.ExecuteContext(ctx)
+}
+
+// newTTSCmd builds the tts command tree. Each command validates its own
+// arguments with parseCLI and prints its hand-written help, so cobra only
+// routes to it; the flags are registered for routing and shell completion.
+func newTTSCmd(client func() *geminiClient, stdin io.Reader) *cobra.Command {
+	command := func(use, short, help string, valueFlags, boolFlags map[string]string, run func(*cobra.Command, []string) error) *cobra.Command {
+		cmd := &cobra.Command{
+			Use: use, Short: short, RunE: run, Args: cobra.ArbitraryArgs,
+			DisableFlagParsing: true, SilenceUsage: true, SilenceErrors: true,
 		}
+		defineCLIFlags(cmd.Flags(), valueFlags, boolFlags)
+		cmd.SetHelpFunc(func(cmd *cobra.Command, _ []string) { _, _ = io.WriteString(cmd.OutOrStdout(), help) })
+		return cmd
 	}
+	tts := command("tts [options] <text>", "Generate speech from text", ttsHelp, ttsValueFlags, ttsBoolFlags,
+		func(cmd *cobra.Command, args []string) error {
+			return runTTSText(cmd.Context(), args, client(), stdin, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		})
+	voices := command("voices [filters]", "List prebuilt, library, and custom voices", voicesHelp, voicesValueFlags(), voicesBoolFlags,
+		func(cmd *cobra.Command, args []string) error {
+			return runVoicesCommand(cmd.Context(), args, client(), cmd.OutOrStdout())
+		})
+	voice := command("voice <design|remix|clone|get|delete>", "Design, remix, clone, inspect, or delete a custom voice", voiceHelp, voiceValueFlags, voiceBoolFlags,
+		func(cmd *cobra.Command, args []string) error {
+			return runVoiceCommand(cmd.Context(), args, client(), cmd.OutOrStdout())
+		})
+	tts.AddCommand(voices, voice)
+	return tts
+}
+
+// runTTSText handles "generate_media tts [options] <text>".
+func runTTSText(ctx context.Context, args []string, client *geminiClient, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		_, err := io.WriteString(stdout, ttsHelp)
 		return err
@@ -681,14 +731,15 @@ func runTTSCommand(ctx context.Context, args []string, client *geminiClient, std
 	return runTTS(ctx, o, client, stdin, stdout, log)
 }
 
-// usageError marks invalid command-line arguments (exit status 2).
+// usageError marks invalid command-line arguments. They exit with status 2
+// and a pointer to the command's help; other failures exit with status 1.
 type usageError struct{ error }
 
 func (e usageError) Unwrap() error { return e.error }
 
 func requireAPIKey(client *geminiClient) error {
 	if client == nil || strings.TrimSpace(client.apiKey) == "" {
-		return errors.New("GEMINI_API_KEY environment variable is required")
+		return errors.New(missingAPIKeyMessage)
 	}
 	return nil
 }
